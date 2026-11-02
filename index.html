@@ -1500,9 +1500,11 @@
           totalWage += (Number(s.hours) || 0) * cuRate(emp);   // 삭제된 알바생의 근무는 금액에 넣지 않는다 (임금대장과 같게)
         });
 
-        // 추가수당(교통비 등)은 고른 점포에 소속된 알바생 것만 더한다
+        // 추가수당(교통비 등)은 그 사람의 주 근무 점포(임금대장과 같은 기준)에 넣는다
+        const primary = cuPrimaryStores(cuMonthShifts(state.year, state.month + 1));
         state.employees.forEach(e => {
-          if (state.currentStore === '전체' || e.store === state.currentStore) {
+          const st = primary[e.id] || e.store;
+          if (state.currentStore === '전체' || st === state.currentStore) {
             totalWage += getEmpExtraPay(e.id, state.year, state.month + 1);
           }
         });
@@ -1600,6 +1602,61 @@
     }
 
     // EXTRA PAY MANAGEMENT
+    // ----------------------------------------------------
+    // 임금대장 집계 — "근무한 점포" 기준 (2026-11-02 대표님 결정)
+    //  · 한 사람이 두 점포에서 일하면 두 점포 블록에 각각 그 점포 근무분만 나온다. (테크트리는 법인 명의라 급여를 나눠 잡아야 함)
+    //  · 추가수당(교통비)은 사람당 한 달에 하나이므로, 그 달 가장 많이 일한 점포(주 근무 점포) 블록에만 넣는다.
+    //  · 소속 점포는 로그인 목록·입퇴사자 표시에만 쓴다.
+    // ----------------------------------------------------
+    function cuMonthShifts(year, month) {   // month: 1~12
+      return state.shifts.filter(s => {
+        const [y, m] = String(s.date || '').split('-').map(Number);
+        return y === year && m === month;
+      });
+    }
+
+    // 그 달 각 알바생의 주 근무 점포 (시간이 가장 많은 점포, 같으면 STORES 순서가 앞선 곳). 근무가 없으면 소속 점포.
+    function cuPrimaryStores(monthShifts) {
+      const hours = {};   // empId → { store → hours }
+      monthShifts.forEach(s => {
+        const st = shiftStoreOf(s);
+        if (!hours[s.empId]) hours[s.empId] = {};
+        hours[s.empId][st] = (hours[s.empId][st] || 0) + (Number(s.hours) || 0);
+      });
+      const order = st => { const i = STORES.indexOf(st); return i < 0 ? STORES.length : i; };
+      const primary = {};
+      Object.keys(hours).forEach(empId => {
+        const best = Object.keys(hours[empId]).sort((a, b) => (hours[empId][b] - hours[empId][a]) || (order(a) - order(b)))[0];
+        primary[empId] = best;
+      });
+      return primary;
+    }
+
+    // 한 점포의 그 달 임금대장 줄들: 그 점포에서 근무한 알바생(명단에 있는 사람)만, 그 점포 근무분만.
+    // 돌려주는 값: [{ emp, days, hours, basicPay, extraPay, totalWage, isPrimary }] — STORES 순서와 무관하게 이름 순.
+    function cuStorePayrollRows(storeName, year, month, monthShifts, primary) {
+      monthShifts = monthShifts || cuMonthShifts(year, month);
+      primary = primary || cuPrimaryStores(monthShifts);
+      const byEmp = {};   // empId → { dates:Set, hours }
+      monthShifts.forEach(s => {
+        if (shiftStoreOf(s) !== storeName) return;
+        if (!byEmp[s.empId]) byEmp[s.empId] = { dates: new Set(), hours: 0 };
+        byEmp[s.empId].dates.add(s.date);
+        byEmp[s.empId].hours += (Number(s.hours) || 0);
+      });
+      const rows = [];
+      state.employees.forEach(e => {
+        const a = byEmp[e.id];
+        if (!a) return;
+        const isPrimary = primary[e.id] === storeName;
+        const basicPay = Math.round(a.hours * cuRate(e));
+        const extraPay = isPrimary ? getEmpExtraPay(e.id, year, month) : 0;
+        rows.push({ emp: e, days: a.dates.size, hours: a.hours, basicPay, extraPay, totalWage: basicPay + extraPay, isPrimary });
+      });
+      rows.sort((x, y) => String(x.emp.name || '').localeCompare(String(y.emp.name || ''), 'ko'));
+      return rows;
+    }
+
     function getEmpExtraPay(empId, year, month) {
       const key = `${empId}_${year}_${month}`;
       return state.extras[key] || 0;
@@ -2132,38 +2189,34 @@
       cuPayrollStale = false;
       container.innerHTML = '';
 
-      // 임금대장은 "소속 점포"별로 묶는다. 한 알바생의 그 달 근무는 어느 점포에서 일했든 모두 그 사람 월급에 들어간다.
+      // 임금대장은 "근무한 점포"별로 묶는다 (cuStorePayrollRows 참고). 두 점포에서 일한 사람은 두 블록에 각각 나온다.
       const storesToDisplay = state.currentStore === '전체'
         ? cuAllStoreNames()
         : [state.currentStore];
 
-      const monthShifts = state.shifts.filter(s => {
-        const [y, m] = s.date.split('-').map(Number);
-        return y === state.year && m === (state.month + 1);
-      });
+      const monthShifts = cuMonthShifts(state.year, state.month + 1);
+      const primary = cuPrimaryStores(monthShifts);
 
       storesToDisplay.forEach(storeName => {
         const displayStoreName = cuStoreLabel(storeName);
         const { joinersStr, resignersStr } = getStoreJoinersResigners(storeName, state.year, state.month + 1);
 
-        const storeEmployees = state.employees.filter(e => (e.store || '') === storeName);
+        const payRows = cuStorePayrollRows(storeName, state.year, state.month + 1, monthShifts, primary);
         let sumHours = 0, sumExtra = 0, sumWage = 0;
 
-        let tableRows = storeEmployees.map(e => {
-          const empShifts = monthShifts.filter(s => s.empId === e.id);
-          const uniqueDays = new Set(empShifts.map(s => s.date)).size;
-          const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
-          const basicPay = Math.round(totalHours * cuRate(e));
-          const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
-          const totalWage = basicPay + extraPay;
+        let tableRows = payRows.map(r => {
+          const e = r.emp;
+          const uniqueDays = r.days, totalHours = r.hours, extraPay = r.extraPay, totalWage = r.totalWage;
           sumHours += totalHours; sumExtra += extraPay; sumWage += totalWage;
+          const otherTag = (primary[e.id] && primary[e.id] !== storeName)
+            ? ` <span class="text-[10px] bg-slate-200 text-slate-700 px-1 rounded">주 근무: ${esc(cuStoreLabel(primary[e.id]))}</span>` : '';
 
           const displayIdNumber = e.idNumber ? `<span class="font-bold font-mono text-slate-900">${esc(e.idNumber)}</span>` : '<span class="text-slate-400 italic">미입력</span>';
           const idTypeTag = e.idType === 'foreigner' ? ' <span class="text-[10px] bg-amber-100 text-amber-800 px-1 rounded font-bold">[외국인]</span>' : '';
 
           return `
             <tr class="hover:bg-slate-50 border-b">
-              <td class="p-3 font-bold text-slate-800">${esc(e.name)}</td>
+              <td class="p-3 font-bold text-slate-800">${esc(e.name)}${otherTag}</td>
               <td class="p-3 text-xs font-mono">${displayIdNumber}${idTypeTag}</td>
               <td class="p-3 text-xs text-slate-700">상용직</td>
               <td class="p-3 text-right text-xs">${cuRate(e).toLocaleString()} 원</td>
@@ -2171,7 +2224,9 @@
               <td class="p-3 text-center font-bold text-xs text-slate-700">${uniqueDays} 일</td>
               <td class="p-3 text-right font-bold text-xs text-purple-900">${totalHours} 시간</td>
               <td class="p-3 text-right">
-                <input type="number" step="1000" min="0" value="${extraPay}" onchange="updateEmpExtraPay('${e.id}', this.value)" class="w-20 border rounded p-1 text-xs text-right font-bold bg-slate-50 focus:bg-white"> 원
+                ${r.isPrimary
+                  ? `<input type="number" step="1000" min="0" value="${extraPay}" onchange="updateEmpExtraPay('${e.id}', this.value)" class="w-20 border rounded p-1 text-xs text-right font-bold bg-slate-50 focus:bg-white"> 원`
+                  : `<span class="text-[10px] text-slate-400">주 근무 점포에서 입력</span>`}
               </td>
               <td class="p-3 text-right font-black text-sm text-emerald-600">${totalWage.toLocaleString()} 원</td>
               <td class="p-3 text-center">
@@ -2183,13 +2238,13 @@
           `;
         }).join('');
 
-        if (storeEmployees.length === 0) {
-          tableRows = `<tr><td colspan="10" class="p-4 text-center text-xs text-slate-400 italic">등록된 알바생이 없습니다.</td></tr>`;
+        if (payRows.length === 0) {
+          tableRows = `<tr><td colspan="10" class="p-4 text-center text-xs text-slate-400 italic">이 달 이 점포에서 근무한 기록이 없습니다.</td></tr>`;
         } else {
-          // 점포 합계 (이 점포에 소속된 알바생들의 그 달 합계)
+          // 점포 합계 (이 점포에서 근무한 알바생들의 이 점포 근무분 합계)
           tableRows += `
             <tr class="bg-purple-50 border-t-2 border-purple-200 font-bold">
-              <td class="p-3 text-xs text-purple-900" colspan="6">점포 합계 (${storeEmployees.length}명)</td>
+              <td class="p-3 text-xs text-purple-900" colspan="6">점포 합계 (${payRows.length}명)</td>
               <td class="p-3 text-right text-xs text-purple-900">${sumHours} 시간</td>
               <td class="p-3 text-right text-xs text-purple-900">${sumExtra.toLocaleString()} 원</td>
               <td class="p-3 text-right font-black text-sm text-emerald-700">${sumWage.toLocaleString()} 원</td>
@@ -2449,15 +2504,13 @@
       // 세무사 제출용은 점포 필터와 상관없이 전 점포를 한 장에 담는다
       const storeList = cuAllStoreNames();
 
-      const currentMonthShifts = state.shifts.filter(s => {
-        const [y, m] = s.date.split('-').map(Number);
-        return y === state.year && m === (state.month + 1);
-      });
+      const currentMonthShifts = cuMonthShifts(state.year, state.month + 1);
+      const primary = cuPrimaryStores(currentMonthShifts);
 
       // 명단에 없는 알바생(삭제됨)의 근무는 어느 블록에도 못 들어간다 → 내보낸 뒤 알려 준다
       const empIds = new Set(state.employees.map(e => e.id));
       const orphan = currentMonthShifts.filter(s => !empIds.has(s.empId));
-      let nPeople = 0, nHours = 0;
+      let nPeople = 0, nHours = 0;   // nPeople = 줄 수 (두 점포에서 일한 사람은 2번 센다)
 
       storeList.forEach(storeName => {
         const displayStoreName = cuStoreLabel(storeName);
@@ -2468,20 +2521,15 @@
         wsData.push(["", "퇴사자", resignersStr]);
         wsData.push(["", "이름", "주민등록번호", "근로기준", "시급", "건강보험\n국민연금 \n가입여부", "총근무일수", "총근무시간", "총 임금지급액"]);
 
-        const storeEmployees = state.employees.filter(e => (e.store || '') === storeName);
+        // 이 점포에서 근무한 사람만, 이 점포 근무분만 (근무 점포 기준)
+        const payRows = cuStorePayrollRows(storeName, state.year, state.month + 1, currentMonthShifts, primary);
 
-        if (storeEmployees.length === 0) {
+        if (payRows.length === 0) {
           wsData.push(["", "-", "-", "상용직", 0, "x", 0, 0, 0]);
         } else {
-          storeEmployees.forEach(e => {
-            const empShifts = currentMonthShifts.filter(s => s.empId === e.id);
-            const uniqueDays = new Set(empShifts.map(s => s.date)).size;
-            const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
-            const basicPay = Math.round(totalHours * cuRate(e));
-            const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
-            const totalWage = basicPay + extraPay;
-            nPeople++; nHours += totalHours;
-
+          payRows.forEach(r => {
+            const e = r.emp;
+            nPeople++; nHours += r.hours;
             wsData.push([
               "",
               e.name,
@@ -2489,9 +2537,9 @@
               "상용직",
               cuRate(e),
               "x",
-              uniqueDays,
-              totalHours,
-              totalWage
+              r.days,
+              r.hours,
+              r.totalWage
             ]);
           });
         }
@@ -2523,26 +2571,19 @@
         return;
       }
 
-      const currentMonthShifts = state.shifts.filter(s => {
-        const [y, m] = s.date.split('-').map(Number);
-        return y === state.year && m === (state.month + 1);
-      });
-
       const storeDisplayName = targetStoreName ? `CU${targetStoreName.replace('씨유', '')}` : 'CU_점포미지정';
       let wb = XLSX.utils.book_new();
       let wsData = [
         ["입금은행", "입금계좌번호", "입금액", "예상예금주", "입금통장표시", "출금통장표시", "메모", "CMS코드", "받는분 휴대폰번호"]
       ];
 
-      const storeEmployees = state.employees.filter(e => (e.store || '') === targetStoreName);
+      // 이 점포에서 근무한 사람에게, 이 점포 근무분(+주 근무 점포면 추가수당)만 이체한다 (근무 점포 기준)
+      const payRows = cuStorePayrollRows(targetStoreName, state.year, state.month + 1);
 
       let hasData = false;
-      storeEmployees.forEach(e => {
-        const empShifts = currentMonthShifts.filter(s => s.empId === e.id);
-        const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
-        const basicPay = Math.round(totalHours * cuRate(e));
-        const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
-        const totalWage = basicPay + extraPay;
+      payRows.forEach(r => {
+        const e = r.emp;
+        const totalWage = r.totalWage;
 
         if (totalWage > 0) {
           hasData = true;
