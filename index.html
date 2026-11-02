@@ -200,9 +200,15 @@
       <div id="tab-employees" class="hidden space-y-4">
         <div class="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200">
           <h3 class="font-bold text-slate-800">등록 알바생 명단 및 입/퇴사일 관리</h3>
-          <button onclick="openEmployeeModal()" class="bg-purple-900 text-white font-bold px-4 py-2 rounded-xl text-sm hover:bg-purple-800">
-            + 알바생 신규 등록
-          </button>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer select-none">
+              <input type="checkbox" id="showResignedToggle" checked onchange="renderEmployeeCards()" class="w-4 h-4 accent-purple-900">
+              퇴사자 보기 <span id="resignedCount" class="text-slate-400 font-normal"></span>
+            </label>
+            <button onclick="openEmployeeModal()" class="bg-purple-900 text-white font-bold px-4 py-2 rounded-xl text-sm hover:bg-purple-800">
+              + 알바생 신규 등록
+            </button>
+          </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="employeeCardsGrid"></div>
       </div>
@@ -2232,7 +2238,14 @@
 
     function renderEmployeeCards() {
       const grid = document.getElementById('employeeCardsGrid');
-      grid.innerHTML = state.employees.map(emp => {
+      // 퇴사자는 "퇴사자 보기"를 켠 동안만 카드에 보인다 (기본: 켬). 숨겨져 있어도 명단·임금대장·저장 데이터에서는 빠지지 않는다.
+      const toggle = document.getElementById('showResignedToggle');
+      const showResigned = !toggle || toggle.checked;
+      const resignedN = state.employees.filter(e => e.resignDate).length;
+      const cnt = document.getElementById('resignedCount');
+      if (cnt) cnt.innerText = resignedN ? `(${resignedN}명)` : '';
+      const list = showResigned ? state.employees : state.employees.filter(e => !e.resignDate);
+      grid.innerHTML = list.map(emp => {
         const bankStr = emp.bankName ? `${emp.bankName} ${emp.accountNumber} (${emp.accountHolder || emp.name})` : '계좌 미입력';
         const displayIdNumber = emp.idNumber || '미입력';
         const statusBadge = emp.resignDate
@@ -2253,7 +2266,9 @@
             </div>
             <div class="flex flex-col gap-1 items-end">
               <button onclick="openEmployeeModal('${emp.id}')" class="text-xs font-bold text-purple-700 hover:underline p-1">수정</button>
-              ${!emp.resignDate ? `<button onclick="quickResign('${emp.id}')" class="text-xs font-bold text-orange-600 hover:underline p-1">퇴사처리</button>` : ''}
+              ${!emp.resignDate
+                ? `<button onclick="quickResign('${emp.id}')" class="text-xs font-bold text-orange-600 hover:underline p-1">퇴사처리</button>`
+                : `<button onclick="cancelResign('${emp.id}')" class="text-xs font-bold text-emerald-700 hover:underline p-1">퇴사 취소</button>`}
               <button onclick="deleteEmployee('${emp.id}')" class="text-xs font-bold text-red-400 hover:text-red-600 p-1">삭제</button>
             </div>
           </div>
@@ -2327,10 +2342,28 @@
         state.employees.push(empObj);
       }
 
-      saveData({ onResult: (ok) => { if (ok) showToast('알바생 정보가 저장되었습니다.'); } });
+      // 퇴사자도 그대로 수정·저장된다. 퇴사일을 비우면 재직으로 돌아간다.
+      saveData({ onResult: (ok, info) => {
+        if (ok) showToast(`${name}님 정보가 서버에 저장되었습니다.` + (resignDate ? ` (퇴사일 ${resignDate})` : ''));
+        else console.warn('employee save failed', info);   // 실패 안내는 cuSaveFailed 가 띄운다
+      } });
       populateEmpSelect();
       render();
       closeEmployeeModal();
+    }
+
+    // 퇴사 취소: 퇴사일을 비워 재직 상태로 되돌린다 (근무기록·계좌 등 다른 정보는 그대로)
+    function cancelResign(empId) {
+      if (!cuReady()) return;
+      const emp = state.employees.find(e => e.id === empId);
+      if (!emp) return;
+      showCustomConfirm('퇴사 취소', `${emp.name}님의 퇴사일(${emp.resignDate})을 지우고 재직 중으로 되돌리시겠습니까?`, () => {
+        emp.resignDate = '';
+        const name = emp.name;
+        saveData({ onResult: (ok) => { if (ok) showToast(`${name}님이 재직 중으로 변경되었습니다.`); } });
+        populateEmpSelect();
+        render();
+      });
     }
 
     function quickResign(empId) {
