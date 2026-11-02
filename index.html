@@ -1,0 +1,2606 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+<!-- This site is hosted on Netlify. Anyone can build and deploy a site
+     like this one for free: https://netlify.new/?utm_campaign=loops&utm_source=ai-legible&utm_medium=owned&utm_content=comment&utm_id=0b3cfb3d-36a0-4262-8e3c-f58b5556cdb1
+     Netlify hosting facts for this site: static/SSR served via Netlify Edge. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 화면 버전. 배포가 됐는지 확인할 때 이 값을 본다 (로그인 화면 아래에도 표시됨) -->
+  <meta name="cu-version" content="2026-10-12">
+  <title>CU 점포 통합 근태 및 임금대장 관리 시스템</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS CDN for Real Excel (.xlsx) Exporting -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    body { font-family: 'Pretendard', sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
+    @media print {
+      body * { visibility: hidden; }
+      #payslipPrintArea, #payslipPrintArea * { visibility: visible; }
+      #payslipPrintArea { position: absolute; left: 0; top: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen pb-12">
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginScreen" class="fixed inset-0 bg-purple-950 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6">
+      <div class="text-center space-y-2">
+        <span class="bg-green-400 text-purple-950 font-black px-4 py-1.5 rounded-full text-xl inline-block">CU</span>
+        <h2 class="text-2xl font-bold text-slate-800">근태 및 임금대장 관리</h2>
+        <div class="flex items-center justify-center gap-1.5 text-xs text-slate-500">
+          <span id="loginCloudStatusBadge" class="px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800">동기화 확인 중...</span>
+        </div>
+      </div>
+
+      <!-- Role Selector Tabs -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl text-sm font-bold">
+        <button id="roleBtnEmp" onclick="setLoginRole('emp')" class="py-2.5 rounded-lg bg-white shadow-sm text-purple-900">알바생 로그인</button>
+        <button id="roleBtnAdmin" onclick="setLoginRole('admin')" class="py-2.5 rounded-lg text-slate-500">점주(관리자)</button>
+      </div>
+
+      <!-- Employee Login Form -->
+      <form id="empLoginForm" onsubmit="handleEmpLogin(event)" class="space-y-4">
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">이름 선택</label>
+          <select id="loginEmpSelect" required class="w-full border border-slate-300 rounded-xl p-3 text-sm font-semibold outline-none bg-slate-50 focus:bg-white"></select>
+        </div>
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">개인 PIN 번호 (초기값: 1234)</label>
+          <input type="password" id="loginEmpPin" required maxlength="4" placeholder="****" class="w-full border border-slate-300 rounded-xl p-3 text-center text-lg tracking-widest font-bold outline-none">
+        </div>
+        <button type="submit" class="w-full bg-purple-900 text-white font-bold py-3.5 rounded-xl hover:bg-purple-800 transition">알바생 접속</button>
+      </form>
+
+      <!-- Admin Login Form -->
+      <form id="adminLoginForm" onsubmit="handleAdminLogin(event)" class="space-y-4 hidden">
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">관리자 비밀번호 (초기값: 0000)</label>
+          <input type="password" id="loginAdminPin" required maxlength="10" placeholder="****" class="w-full border border-slate-300 rounded-xl p-3 text-center text-lg tracking-widest font-bold outline-none">
+        </div>
+        <button type="submit" class="w-full bg-purple-950 text-white font-bold py-3.5 rounded-xl hover:bg-purple-900 transition">점주 관리자 접속</button>
+      </form>
+
+      <p class="text-center text-[10px] text-slate-400">화면 버전 <span id="clientVerText">2026-10-12</span></p>
+      <!-- 이 기기에 연동 주소가 따로 저장돼 있을 때만 보인다 (주소가 잘못 저장돼 접속이 안 될 때 되돌리는 용도) -->
+      <p id="gasResetRow" class="hidden text-center text-[11px] text-amber-700">
+        이 기기는 따로 저장한 연동 주소를 쓰고 있습니다.
+        <button type="button" onclick="cuResetServerFromLogin()" class="underline font-bold">기본 주소로 되돌리기</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- MAIN APP CONTAINER -->
+  <div id="appContainer" class="hidden">
+    <!-- Header -->
+    <header class="bg-purple-900 text-white shadow-lg sticky top-0 z-30">
+      <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div class="flex items-center space-x-3">
+          <span class="bg-green-400 text-purple-950 font-black px-3 py-1 rounded-full text-lg">CU</span>
+          <div>
+            <h1 class="text-xl font-bold flex items-center gap-2">
+              통합 근태 및 임금대장 관리
+              <span id="appCloudBadge" class="text-[11px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-purple-950">로컬 모드</span>
+            </h1>
+            <p class="text-xs text-purple-200" id="userInfoBadge">접속 정보 불러오는 중...</p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Google Workspace Setup Button (Admin) -->
+          <button id="cloudSetupBtn" onclick="openCloudModal()" class="hidden bg-indigo-600 hover:bg-indigo-500 text-xs text-white font-bold px-3 py-2 rounded-lg transition shadow-sm">
+            ☁️ 구글 실시간 연동 설정
+          </button>
+
+          <!-- Employee Self Buttons -->
+          <button id="empProfileBtn" onclick="openSelfProfileModal()" class="hidden bg-emerald-600 hover:bg-emerald-500 text-xs text-white font-bold px-3 py-2 rounded-lg transition shadow-sm">
+            👤 내 정보 & PIN 수정
+          </button>
+          <button id="empPayslipBtn" onclick="openCurrentEmpPayslip()" class="hidden bg-blue-600 hover:bg-blue-500 text-xs text-white font-bold px-3 py-2 rounded-lg transition shadow-sm">
+            📄 내 이번 달 급여명세서
+          </button>
+
+          <!-- Admin Change Password Button -->
+          <button id="adminPinBtn" onclick="openAdminPinModal()" class="hidden bg-purple-950 hover:bg-purple-800 border border-purple-700 text-xs text-purple-100 font-bold px-3 py-2 rounded-lg transition shadow-sm">
+            🔑 비밀번호 변경
+          </button>
+
+          <!-- Store Selector (Admin Only) -->
+          <select id="storeFilter" onchange="changeStoreFilter(this.value)" class="bg-purple-800 text-white text-sm font-semibold px-3 py-2 rounded-lg border border-purple-700 focus:outline-none">
+            <option value="전체">🏪 전체 점포 보기</option>
+            <option value="씨유매탄힐스">씨유매탄힐스</option>
+            <option value="씨유광교유니코어">씨유광교유니코어</option>
+            <option value="씨유영통테크트리">씨유영통테크트리</option>
+          </select>
+
+          <!-- Month Nav -->
+          <div class="flex items-center bg-purple-800 rounded-lg p-1 border border-purple-700">
+            <button onclick="changeMonth(-1)" class="px-2 py-1 hover:bg-purple-700 rounded text-sm font-bold">&lt;</button>
+            <span id="currentMonthStr" class="px-3 font-bold text-sm min-w-[100px] text-center">2026년 7월</span>
+            <button onclick="changeMonth(1)" class="px-2 py-1 hover:bg-purple-700 rounded text-sm font-bold">&gt;</button>
+          </div>
+
+          <button onclick="logout()" class="bg-purple-950 hover:bg-purple-800 text-xs text-purple-200 font-bold px-3 py-2 rounded-lg border border-purple-700">로그아웃</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 mt-6">
+      <!-- KPI Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center">
+          <div>
+            <p class="text-xs font-bold text-slate-400 uppercase" id="kpiLabelHours">총 근무시간</p>
+            <h3 id="statTotalHours" class="text-2xl font-black text-purple-900 mt-1">0 시간</h3>
+          </div>
+          <div class="p-3 bg-purple-50 text-purple-700 rounded-xl font-bold">⏰</div>
+        </div>
+
+        <div id="kpiWageCard" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center">
+          <div>
+            <p class="text-xs font-bold text-slate-400 uppercase">총 정산 인건비 (1.0배)</p>
+            <h3 id="statTotalWage" class="text-2xl font-black text-emerald-600 mt-1">0 원</h3>
+          </div>
+          <div class="p-3 bg-emerald-50 text-emerald-600 rounded-xl font-bold">💰</div>
+        </div>
+
+        <div id="kpiEmpCard" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center">
+          <div>
+            <p class="text-xs font-bold text-slate-400 uppercase">재직 알바생</p>
+            <h3 id="statEmployeeCount" class="text-2xl font-black text-blue-600 mt-1">0 명</h3>
+          </div>
+          <div class="p-3 bg-blue-50 text-blue-600 rounded-xl font-bold">👥</div>
+        </div>
+      </div>
+
+      <!-- 점포 표기 확인 안내 (관리자 전용, 확인할 기록이 있을 때만 보인다) -->
+      <div id="storeReviewNotice" class="hidden mb-6"></div>
+
+      <!-- Navigation Tabs -->
+      <div id="tabNav" class="flex border-b border-slate-200 mb-6 space-x-2">
+        <button id="tabBtn-calendar" onclick="switchTab('calendar')" class="px-5 py-3 font-bold border-b-2 border-purple-900 text-purple-900">📅 근무 캘린더</button>
+        <button id="tabBtn-payroll" onclick="switchTab('payroll')" class="admin-only hidden px-5 py-3 font-bold text-slate-500 hover:text-slate-800">🧾 세무사 제출용 임금대장</button>
+        <button id="tabBtn-employees" onclick="switchTab('employees')" class="admin-only hidden px-5 py-3 font-bold text-slate-500 hover:text-slate-800">⚙️ 알바생 명단 및 입/퇴사 관리</button>
+      </div>
+
+      <!-- TAB 1: CALENDAR -->
+      <div id="tab-calendar" class="space-y-4">
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <div class="grid grid-cols-7 gap-1 text-center font-bold text-sm text-slate-500 mb-2 py-2 border-b">
+            <div class="text-red-500">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div class="text-blue-500">토</div>
+          </div>
+          <div id="calendarGrid" class="grid grid-cols-7 gap-1"></div>
+        </div>
+      </div>
+
+      <!-- TAB 2: PAYROLL & TAX REPORTING -->
+      <div id="tab-payroll" class="hidden space-y-4">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+            <div>
+              <h3 class="font-bold text-slate-800">월별 아르바이트 임금대장 & 급여 이체 관리</h3>
+              <p class="text-xs text-slate-500">점포별로 은행 이체용 엑셀을 따로 다운로드하거나 세무사 전달용 엑셀을 내려받을 수 있습니다.</p>
+            </div>
+            <div>
+              <button onclick="exportTaxExcel()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition shadow-sm">
+                📊 세무사 전달용 전체 임금대장 엑셀 (.xlsx)
+              </button>
+            </div>
+          </div>
+          <div class="p-4 space-y-6" id="payrollTablesContainer"></div>
+        </div>
+      </div>
+
+      <!-- TAB 3: EMPLOYEES -->
+      <div id="tab-employees" class="hidden space-y-4">
+        <div class="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200">
+          <h3 class="font-bold text-slate-800">등록 알바생 명단 및 입/퇴사일 관리</h3>
+          <button onclick="openEmployeeModal()" class="bg-purple-900 text-white font-bold px-4 py-2 rounded-xl text-sm hover:bg-purple-800">
+            + 알바생 신규 등록
+          </button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="employeeCardsGrid"></div>
+      </div>
+
+      <!-- Data Backup & Monthly Reset Tools (Admin Only) -->
+      <div class="admin-only hidden mt-8 p-4 bg-slate-200 rounded-2xl flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-slate-600">
+        <div>💾 데이터 백업 및 월별 근무기록 초기화 관리</div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="exportData()" class="bg-white font-bold px-3 py-1.5 rounded-lg border hover:bg-slate-50">데이터 백업 (.json)</button>
+          <button onclick="document.getElementById('importFile').click()" class="bg-white font-bold px-3 py-1.5 rounded-lg border hover:bg-slate-50">복구하기</button>
+          <button onclick="resetMonthData()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-lg transition">🗑️ 현재 선택 월 근무기록 초기화</button>
+          <input type="file" id="importFile" accept=".json" onchange="importData(event)" class="hidden">
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- GOOGLE WORKSPACE CONFIG MODAL -->
+  <div id="cloudModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div class="flex justify-between items-center border-b pb-3">
+        <div>
+          <h3 class="font-bold text-lg text-slate-800">☁️ 구글 워크스페이스 실시간 연동 설정</h3>
+          <p class="text-xs text-purple-700">대표님의 구글 드라이브와 100% 실시간 연동됩니다.</p>
+        </div>
+        <button onclick="closeCloudModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <form onsubmit="saveCloudConfig(event)" class="space-y-3">
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">구글 웹 앱 URL (Google Apps Script Web App URL)</label>
+          <input type="text" id="cfgGasUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border rounded-xl p-2.5 text-xs outline-none font-mono">
+        </div>
+
+        <div class="bg-slate-50 p-3 rounded-2xl border text-[11px] text-slate-600 space-y-1">
+          <p class="font-bold text-slate-800">💡 Google Workspace 연동 안내:</p>
+          <p>이 주소가 설정되면 알바생이 카톡으로 들어와도 자동으로 똑같은 구글 DB에 접근하여 실시간으로 모든 데이터가 완벽 동기화됩니다.</p>
+        </div>
+
+        <div class="flex gap-2">
+          <button type="button" onclick="clearCloudConfig()" class="w-1/3 bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-xs">기본 주소로</button>
+          <button type="submit" class="w-2/3 bg-purple-900 text-white font-bold py-3 rounded-xl text-xs hover:bg-purple-800">저장 및 구글 연동 시작</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- PAYSLIP MODAL -->
+  <div id="payslipModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-2xl w-full p-6 space-y-5 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 class="font-black text-xl text-slate-800" id="payslipTitle">급여명세서</h3>
+        <button onclick="closePayslipModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <div id="payslipPrintArea" class="bg-blue-50/40 p-4 rounded-2xl border border-blue-100 space-y-4 text-xs">
+        <div class="font-bold text-sm text-slate-800" id="payslipHeaderDoc">급여명세서 1</div>
+
+        <table class="w-full border-collapse border border-slate-800 text-center bg-white">
+          <tbody>
+            <tr>
+              <td class="border border-slate-800 p-2 font-bold bg-slate-100 w-24">근무지</td>
+              <td class="border border-slate-800 p-2 font-black text-sm" colspan="5" id="psStore">매탄힐스</td>
+            </tr>
+            <tr>
+              <td class="border border-slate-800 p-2 font-bold bg-slate-100">성명</td>
+              <td class="border border-slate-800 p-2 font-bold text-left px-3" colspan="5" id="psName">홍길동</td>
+            </tr>
+            <tr>
+              <td class="border border-slate-800 p-2 font-bold bg-slate-100">주민등록번호</td>
+              <td class="border border-slate-800 p-2 font-mono" id="psRRN">950101-1******</td>
+              <td class="border border-slate-800 p-2 font-bold bg-slate-100">급여지급은행</td>
+              <td class="border border-slate-800 p-2" id="psBank">신한</td>
+              <td class="border border-slate-800 p-2 font-bold bg-slate-100">급여계좌</td>
+              <td class="border border-slate-800 p-2 font-mono" id="psAccount">110123456789</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="flex items-center my-2">
+          <table class="w-full border-collapse">
+            <tbody>
+              <tr>
+                <td class="border-2 border-red-600 p-2.5 font-black text-sm bg-slate-100 w-32 text-center text-slate-900">최종급여</td>
+                <td class="border-2 border-red-600 p-2.5 font-black text-lg text-right pr-6 bg-white text-slate-900" id="psNetSalary">349,280.4</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div class="font-bold text-slate-800 mb-1">급여항목</div>
+          <table class="w-full border-collapse border border-slate-800 bg-white">
+            <tbody>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100 w-28">기본급</td>
+                <td class="border border-slate-800 p-2 text-center" colspan="4">시급 X 근무 시간</td>
+                <td class="border border-slate-800 p-2 text-right font-bold pr-3" id="psBasicPay">361,200</td>
+              </tr>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100">시급</td>
+                <td class="border border-slate-800 p-2 text-center font-bold" id="psHourlyRate">10,320</td>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100 text-center">근무시간</td>
+                <td class="border border-slate-800 p-2 text-center font-bold" id="psHours">35</td>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100 text-center">추가 (교통비 등)</td>
+                <td class="border border-slate-800 p-2 text-right font-bold pr-3 text-purple-900" id="psExtraPay">0</td>
+              </tr>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100">소계</td>
+                <td class="border border-slate-800 p-2" colspan="4"></td>
+                <td class="border border-slate-800 p-2 text-right font-bold pr-3" id="psGrossSubtotal">361,200</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div class="font-bold text-slate-800 mb-1">공제항목</div>
+          <table class="w-full border-collapse border border-slate-800 bg-white">
+            <tbody>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100 w-28">원천징수 (3.3%)</td>
+                <td class="border border-slate-800 p-2 text-center" colspan="4">기본급 X 3.3%</td>
+                <td class="border border-slate-800 p-2 text-right font-bold text-red-600 pr-3" id="psTaxDeduction">11,919.6</td>
+              </tr>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100">기타</td>
+                <td class="border border-slate-800 p-2" colspan="4"></td>
+                <td class="border border-slate-800 p-2 text-right pr-3">0</td>
+              </tr>
+              <tr>
+                <td class="border border-slate-800 p-2 font-bold bg-slate-100">소계</td>
+                <td class="border border-slate-800 p-2" colspan="4"></td>
+                <td class="border border-slate-800 p-2 text-right font-bold text-red-600 pr-3" id="psDeductSubtotal">11,919.6</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row gap-2 pt-2">
+        <button onclick="copyKakaoPayslipText()" class="flex-1 bg-yellow-400 hover:bg-yellow-500 text-purple-950 font-bold py-3 rounded-xl transition text-xs flex justify-center items-center gap-1 shadow">
+          💬 카카오톡 전송용 텍스트 복사
+        </button>
+        <button onclick="window.print()" class="flex-1 bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition text-xs flex justify-center items-center gap-1 shadow">
+          🖨️ 명세서 인쇄 / PDF 저장
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN PASSWORD CHANGE MODAL -->
+  <div id="adminPinModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 class="font-bold text-lg text-slate-800">관리자 비밀번호 변경</h3>
+        <button onclick="closeAdminPinModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+      <form onsubmit="saveAdminPin(event)" class="space-y-3">
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">현재 관리자 비밀번호</label>
+          <input type="password" id="curAdminPinInput" required maxlength="10" class="w-full border rounded-xl p-2.5 text-sm font-bold text-center tracking-widest outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">새 비밀번호 (4자리 이상)</label>
+          <input type="password" id="newAdminPinInput" required maxlength="10" class="w-full border rounded-xl p-2.5 text-sm font-bold text-center tracking-widest outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">새 비밀번호 확인</label>
+          <input type="password" id="confirmAdminPinInput" required maxlength="10" class="w-full border rounded-xl p-2.5 text-sm font-bold text-center tracking-widest outline-none">
+        </div>
+        <button type="submit" class="w-full bg-purple-950 hover:bg-purple-900 text-white font-bold py-3 rounded-xl transition">
+          비밀번호 변경 저장
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SHIFT MODAL -->
+  <div id="shiftModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-5">
+      <div class="flex justify-between items-center border-b pb-3">
+        <div>
+          <h3 class="font-bold text-lg text-slate-800" id="modalShiftDateTitle">근무 등록</h3>
+          <p class="text-xs text-purple-700 font-medium">프리셋 버튼으로 1초 만에 등록하세요</p>
+        </div>
+        <button onclick="closeShiftModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <!-- Quick Presets -->
+      <div>
+        <label class="text-xs font-bold text-slate-500 mb-2 block">⚡ 빠른 등록 프리셋</label>
+        <div class="grid grid-cols-2 gap-2">
+          <button onclick="applyPreset('주간', 7)" class="bg-amber-50 border border-amber-200 text-amber-800 font-bold py-2.5 rounded-xl text-sm flex justify-between px-3">
+            <span>☀️ 주간 근무</span><span>7시간</span>
+          </button>
+          <button onclick="applyPreset('주간', 8)" class="bg-amber-50 border border-amber-200 text-amber-800 font-bold py-2.5 rounded-xl text-sm flex justify-between px-3">
+            <span>☀️ 주간 풀타임</span><span>8시간</span>
+          </button>
+          <button onclick="applyPreset('야간', 8)" class="bg-indigo-50 border border-indigo-200 text-indigo-800 font-bold py-2.5 rounded-xl text-sm flex justify-between px-3">
+            <span>🌙 야간 풀타임</span><span>8시간</span>
+          </button>
+          <button onclick="applyPreset('대타', 7)" class="bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold py-2.5 rounded-xl text-sm flex justify-between px-3">
+            <span>🔄 긴급 대타</span><span>7시간</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Manual Input -->
+      <form id="shiftForm" onsubmit="saveShift(event)" class="space-y-3 pt-2 border-t">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">알바생</label>
+            <select id="shiftEmpId" required onchange="cuSetShiftStoreFor(this.value)" class="w-full border rounded-xl p-2.5 text-sm font-semibold bg-slate-50 outline-none"></select>
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">근무 점포</label>
+            <select id="shiftStore" required class="w-full border rounded-xl p-2.5 text-sm font-semibold bg-slate-50 outline-none">
+              <option value="씨유매탄힐스">씨유매탄힐스</option>
+              <option value="씨유광교유니코어">씨유광교유니코어</option>
+              <option value="씨유영통테크트리">씨유영통테크트리</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">구분</label>
+            <select id="shiftType" class="w-full border rounded-xl p-2.5 text-sm font-semibold bg-slate-50 outline-none">
+              <option value="주간">주간</option>
+              <option value="야간">야간</option>
+              <option value="대타">대타</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">시간(h)</label>
+            <input type="number" id="shiftHours" step="0.5" min="0.5" max="24" required class="w-full border rounded-xl p-2.5 text-sm font-semibold bg-slate-50 outline-none" placeholder="예: 7">
+          </div>
+        </div>
+
+        <button type="submit" class="w-full bg-purple-900 text-white font-bold py-3 rounded-xl">근태 추가 / 저장</button>
+      </form>
+
+      <!-- Existing List -->
+      <div class="border-t pt-3">
+        <h4 class="text-xs font-bold text-slate-500 mb-2">등록된 근무 기록</h4>
+        <div id="dayShiftList" class="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMPLOYEE SELF PROFILE & PIN MODAL -->
+  <div id="selfProfileModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4">
+      <div class="flex justify-between items-center border-b pb-3">
+        <div>
+          <h3 class="font-bold text-lg text-slate-800">내 정보 & PIN 번호 수정</h3>
+          <p class="text-xs text-purple-700">급여 입금 계좌, 주민번호 및 PIN 번호를 수정하세요.</p>
+        </div>
+        <button onclick="closeSelfProfileModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <form id="selfProfileForm" onsubmit="saveSelfProfile(event)" class="space-y-3">
+        <div class="bg-purple-50 p-3 rounded-2xl border border-purple-200">
+          <label class="text-xs font-bold text-purple-900 block mb-1">🔑 로그인 PIN 번호 변경 (숫자 4자리)</label>
+          <input type="password" id="selfPin" maxlength="4" required placeholder="****" class="w-full border border-purple-300 rounded-xl p-2.5 text-sm font-bold text-center tracking-widest outline-none bg-white focus:ring-2 focus:ring-purple-600">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 pt-1">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">은행명</label>
+            <input type="text" id="selfBankName" placeholder="예: 신한, 국민" class="w-full border rounded-xl p-2.5 text-sm outline-none">
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">예금주명</label>
+            <input type="text" id="selfAccountHolder" placeholder="홍길동" class="w-full border rounded-xl p-2.5 text-sm outline-none">
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">계좌번호 ('-' 제외 숫자만)</label>
+          <input type="text" id="selfAccountNumber" placeholder="110123456789" class="w-full border rounded-xl p-2.5 text-sm outline-none">
+        </div>
+
+        <div class="border-t pt-3">
+          <label class="text-xs font-bold text-slate-500 block mb-1">신원 식별 유형 (세무 신고용)</label>
+          <select id="selfIdType" onchange="toggleSelfIdInput()" class="w-full border rounded-xl p-2.5 text-sm outline-none bg-slate-50 font-bold text-purple-900 mb-2">
+            <option value="resident">내국인 (주민등록번호)</option>
+            <option value="foreigner">외국인 (외국인등록번호)</option>
+            <option value="none">미입력 (생략)</option>
+          </select>
+
+          <div id="selfIdNumberContainer">
+            <label id="selfIdLabel" class="text-xs font-bold text-slate-500 block mb-1">주민등록번호</label>
+            <input type="text" id="selfIdNumber" placeholder="950101-1234567" class="w-full border rounded-xl p-2.5 text-sm outline-none font-mono">
+          </div>
+        </div>
+
+        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition shadow-md">
+          내 정보 및 PIN 저장하기
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ADMIN EMPLOYEE MODAL -->
+  <div id="employeeModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 class="font-bold text-lg text-slate-800" id="empModalTitle">알바생 등록/수정</h3>
+        <button onclick="closeEmployeeModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <form id="employeeForm" onsubmit="saveEmployee(event)" class="space-y-3">
+        <input type="hidden" id="empId">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">이름</label>
+            <input type="text" id="empName" required class="w-full border rounded-xl p-2.5 text-sm outline-none">
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">주 소속 점포</label>
+            <select id="empStore" required class="w-full border rounded-xl p-2.5 text-sm outline-none">
+              <option value="씨유매탄힐스">씨유매탄힐스</option>
+              <option value="씨유광교유니코어">씨유광교유니코어</option>
+              <option value="씨유영통테크트리">씨유영통테크트리</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">약정 시급 (원)</label>
+            <input type="number" id="empHourlyRate" required min="1000" step="10" value="10320" class="w-full border rounded-xl p-2.5 text-sm outline-none">
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">접속 PIN 번호</label>
+            <input type="password" id="empPin" maxlength="4" value="1234" required class="w-full border rounded-xl p-2.5 text-sm outline-none font-bold">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 border-t pt-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">입사일</label>
+            <input type="date" id="empJoinDate" required class="w-full border rounded-xl p-2 text-xs outline-none bg-slate-50">
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">퇴사일 (재직 중일 때 비움)</label>
+            <input type="date" id="empResignDate" class="w-full border rounded-xl p-2 text-xs outline-none bg-slate-50">
+          </div>
+        </div>
+
+        <div class="border-t pt-3 space-y-2">
+          <p class="text-xs font-bold text-purple-900">🏦 계좌 및 세무 신고 정보</p>
+          <div class="grid grid-cols-3 gap-2">
+            <input type="text" id="empBankName" placeholder="은행명" class="border rounded-xl p-2 text-xs">
+            <input type="text" id="empAccountNumber" placeholder="계좌번호" class="col-span-2 border rounded-xl p-2 text-xs">
+          </div>
+          <input type="text" id="empAccountHolder" placeholder="예금주명" class="w-full border rounded-xl p-2 text-xs">
+
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <select id="empIdType" onchange="toggleAdminIdInput()" class="border rounded-xl p-2 text-xs font-bold bg-slate-50">
+              <option value="resident">내국인 (주민번호)</option>
+              <option value="foreigner">외국인 (외국인번호)</option>
+              <option value="none">미입력 (생략)</option>
+            </select>
+            <input type="text" id="empIdNumber" placeholder="주민/외국인번호" class="border rounded-xl p-2 text-xs font-mono">
+          </div>
+        </div>
+
+        <button type="submit" class="w-full bg-purple-900 text-white font-bold py-3 rounded-xl mt-2">저장하기</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- STORE LABEL REVIEW MODAL (관리자 전용: 점포 표기 확인) -->
+  <div id="storeReviewModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div class="flex justify-between items-center border-b pb-3">
+        <div>
+          <h3 class="font-bold text-lg text-slate-800">점포 표기 확인</h3>
+          <p class="text-xs text-purple-700">2026년 9월 21일 이후, 근무 점포를 고를 수 없던 화면에서 입력된 기록입니다.</p>
+        </div>
+        <button onclick="closeStoreReviewModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+      </div>
+
+      <div class="bg-slate-50 p-3 rounded-2xl border text-[11px] text-slate-600 space-y-1">
+        <p>✅ <b>체크한 기록</b>은 그 알바생의 <b>소속 점포</b>로 바꿉니다.</p>
+        <p>⬜ 실제로 다른 점포에서 일한 기록이면 <b>체크를 푸세요</b>. 지금 표기 그대로 둡니다.</p>
+        <p>알바생별 월급(임금대장)은 이 작업과 상관없이 같습니다. 달라지는 것은 <b>점포별 합계</b>뿐입니다.</p>
+      </div>
+
+      <div class="flex justify-between items-center text-xs">
+        <label class="flex items-center gap-1.5 font-bold text-slate-700 cursor-pointer">
+          <input type="checkbox" id="storeReviewAll" checked onchange="toggleStoreReviewAll(this.checked)"> 전체 선택
+        </label>
+        <span id="storeReviewCount" class="font-bold text-purple-900"></span>
+      </div>
+
+      <div class="border rounded-xl overflow-hidden">
+        <div class="max-h-72 overflow-y-auto custom-scrollbar">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="bg-slate-50 text-slate-600 font-semibold border-b">
+                <th class="p-2 w-8"></th>
+                <th class="p-2">근무일</th>
+                <th class="p-2">이름</th>
+                <th class="p-2 text-right">시간</th>
+                <th class="p-2">지금 표기</th>
+                <th class="p-2">소속 점포</th>
+              </tr>
+            </thead>
+            <tbody id="storeReviewList"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <button onclick="applyStoreReview()" class="w-full bg-purple-900 hover:bg-purple-800 text-white font-bold py-3 rounded-xl transition">적용하기</button>
+    </div>
+  </div>
+
+  <!-- CUSTOM ALERT MODAL -->
+  <div id="customModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 text-center space-y-4">
+      <div id="customModalIcon" class="text-4xl">⚠️</div>
+      <h3 id="customModalTitle" class="font-bold text-lg text-slate-800">알림</h3>
+      <p id="customModalMessage" class="text-sm text-slate-600">내용</p>
+      <div class="flex gap-2 pt-2" id="customModalActions"></div>
+    </div>
+  </div>
+
+  <script>
+    // ----------------------------------------------------
+    // ★★★ [필수 설정] 대표님의 구글 Apps Script Web App URL을 작은따옴표 안쪽에 붙여넣으세요!
+    // ----------------------------------------------------
+    const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzaHavBKatNswdJXPRb7rFHZ0ba2mW4tp8Z4lHHzl8HhoF0CGKgmVWtLaT-Lq2xmkmypg/exec';
+
+    // ----------------------------------------------------
+    // 화면 버전 — 고칠 때마다 날짜를 바꾼다. (위쪽 <meta name="cu-version"> 도 같은 값으로)
+    // ----------------------------------------------------
+    const CU_CLIENT_VER = '2026-10-12';
+
+    // ----------------------------------------------------
+    // 점포 목록 — 점포를 넣고 뺄 때는 이 한 줄만 고치면 된다. (화면의 점포 선택 칸 3곳은 이 목록으로 채워진다)
+    // 서버(Code.gs)의 STORES 와 같은 이름·같은 순서로 맞출 것.
+    // ----------------------------------------------------
+    const STORES = ['씨유매탄힐스', '씨유광교유니코어', '씨유영통테크트리'];
+
+    // 2026-09-21 부터 이 버전을 배포하기 전까지는 화면에서 근무 점포를 고를 수 없었다(유니코어만 선택 가능).
+    // 그 기간에 입력된 근무는 점포 표기를 믿기 어려워, 관리자 화면의 「점포 표기 확인」 대상이 된다.
+    const STORE_FIX_FROM = Date.parse('2026-09-21T00:00:00+09:00');
+
+    try {
+      if (!localStorage.getItem('cu_v2')) {
+        ['cu_employees','cu_shifts','cu_extras','cu_admin_pin'].forEach(k => localStorage.removeItem(k));
+        localStorage.setItem('cu_v2','1');
+      }
+      // 브라우저에는 "이름 명단"만 남긴다. 이전 버전이 저장해 둔 근무기록·추가수당·관리자 비밀번호는 지운다.
+      ['cu2_shifts', 'cu2_extras', 'cu2_admin_pin'].forEach(k => localStorage.removeItem(k));
+    } catch (e) {}
+
+    // 점포 이름의 옛 표기만 바로잡는다. 모르는 값(빈 값 포함)은 건드리지 않는다.
+    function migrateStoreName(oldStore) {
+      const s = String(oldStore == null ? '' : oldStore).trim();
+      if (STORES.includes(s)) return s;
+      if (s.includes('매탄')) return '씨유매탄힐스';
+      if (s.includes('유니코어')) return '씨유광교유니코어';
+      if (s.includes('테크트리')) return '씨유영통테크트리';
+      return s;
+    }
+
+    // 개인정보를 뺀 명단 (이름·점포·입퇴사일). 로그인 화면의 이름 목록에만 쓴다.
+    function cuRosterOnly(list) {
+      return (Array.isArray(list) ? list : []).filter(e => e && e.id).map(e => ({
+        id: e.id,
+        name: e.name || '',
+        store: migrateStoreName(e.store),
+        joinDate: e.joinDate || '',
+        resignDate: e.resignDate || ''
+      }));
+    }
+
+    // 브라우저 저장: 명단만. (주민번호·계좌·PIN·근무기록·관리자 비밀번호는 브라우저에 남기지 않는다)
+    function cuPersistLocal() {
+      try {
+        localStorage.setItem('cu2_employees', JSON.stringify(cuRosterOnly(state.employees)));
+      } catch (e) {}
+    }
+
+    function cuReadLocalRoster() {
+      try {
+        return cuRosterOnly(JSON.parse(localStorage.getItem('cu2_employees') || '[]'));
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Auto-capture ?gas= parameter from URL if provided in Kakao link
+    let activeGasUrl = DEFAULT_GAS_URL;
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const paramGasUrl = urlParams.get('gas');
+      if (paramGasUrl) {
+        localStorage.setItem('cu_gas_url', paramGasUrl);
+      }
+      activeGasUrl = localStorage.getItem('cu_gas_url') || DEFAULT_GAS_URL;
+    } catch (e) {}
+
+    let state = {
+      adminPin: '',
+      currentUser: null,
+      currentStore: '전체',
+      year: new Date().getFullYear(),
+      month: new Date().getMonth(),
+      employees: cuReadLocalRoster(),
+      shifts: [],
+      extras: {},
+      gasUrl: activeGasUrl,
+      selectedDate: null,
+      currentPayslipData: null
+    };
+    cuPersistLocal();   // 이전 버전이 명단에 함께 저장해 둔 개인정보를 이 자리에서 걷어낸다
+
+    // 화면에 글자를 끼워 넣기 전에 반드시 거친다. (알바생이 입력한 은행명·주민번호 등에 코드가 섞여 있어도 글자로만 보이게)
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // 시급 (비어 있으면 0)
+    function cuRate(emp) {
+      return Number(emp && emp.hourlyRate) || 0;
+    }
+
+    // 오늘 날짜 (이 기기의 시각 기준. toISOString 은 한국 시각 00~09시에 어제 날짜를 준다)
+    function cuToday() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    // 알바생의 소속 점포 (목록에 있는 점포일 때만)
+    function cuHomeStore(empId) {
+      const e = state.employees.find(x => x.id === empId);
+      return (e && STORES.includes(e.store)) ? e.store : '';
+    }
+
+    // 근무 한 건이 어느 점포 것인지. 점포 칸이 비었거나 모르는 이름이면 그 알바생의 소속 점포로 본다.
+    function shiftStoreOf(s) {
+      if (STORES.includes(s.store)) return s.store;
+      return cuHomeStore(s.empId) || (s.store || '');
+    }
+
+    // 점포 이름을 화면용으로 ("씨유매탄힐스" → "CU 매탄힐스점")
+    function cuStoreLabel(storeName) {
+      return storeName ? `CU ${storeName.replace('씨유', '')}점` : '점포 미지정';
+    }
+
+    // 보여 줄 점포 전체: 등록 점포 + (혹시 있다면) 목록에 없는 소속 점포 — 어떤 알바생도 화면에서 빠지지 않게
+    function cuAllStoreNames() {
+      const extra = [];
+      state.employees.forEach(e => {
+        const s = e.store || '';
+        if (!STORES.includes(s) && !extra.includes(s)) extra.push(s);
+      });
+      return STORES.concat(extra);
+    }
+
+    // 재직 중인 알바생을 점포 순서 → 이름 순서로
+    function cuSortedActiveEmps() {
+      const order = s => { const i = STORES.indexOf(s); return i < 0 ? STORES.length : i; };
+      return state.employees.filter(e => !e.resignDate).slice().sort((a, b) =>
+        (order(a.store) - order(b.store)) || String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    }
+
+    // 화면의 점포 선택 칸 3곳을 STORES 로 채운다
+    function cuFillStoreSelects() {
+      const opts = STORES.map(s => `<option value="${s}">${s}</option>`).join('');
+      const filter = document.getElementById('storeFilter');
+      if (filter) {
+        filter.innerHTML = '<option value="전체">🏪 전체 점포 보기</option>' + opts;
+        filter.value = state.currentStore;
+      }
+      const shiftStore = document.getElementById('shiftStore');
+      if (shiftStore) shiftStore.innerHTML = opts;
+      const empStore = document.getElementById('empStore');
+      if (empStore) empStore.innerHTML = opts;
+    }
+
+    // GOOGLE WORKSPACE CLOUD SYNC ENGINE (v3 — 2026-10-12)
+    //  · 서버가 원본이다. 화면은 5초마다 서버 내용을 받아 온다.
+    //  · 저장은 한 번에 하나씩 차례로 보낸다.
+    //  · 화면에서 무언가 바꾸거나 저장이 실패할 때마다 "세대 번호(cuGen)"가 오른다.
+    //    세대가 바뀌기 전에 보낸 조회의 응답은 옛 내용이므로 버린다.
+    //    (버리지 않으면 방금 입력한 근무가 화면에서 사라졌다가, 다음 저장 때 서버에서도 지워질 수 있다)
+    //  · 로그인·로그아웃 전에 보낸 요청의 응답도 버린다(cuEpoch).
+    //    (명단만 들어 있는 응답이 로그인 직후에 늦게 도착해 화면 데이터를 비우는 사고 방지)
+    //  · 알바생은 "내가 더한 근무·지운 근무"만 서버에 보낸다(서버가 지원할 때).
+    //    내 화면이 옛 내용이어도, 그 사이 관리자가 고친 내 근무를 되돌리지 않는다.
+    //  · 저장이 실패하면 화면을 "서버가 마지막으로 확인해 준 내용"으로 즉시 되돌린다.
+    let cloudPollTimer = null;
+    let cuEpoch = 0;            // 로그인·로그아웃 때마다 1씩 오른다
+    let cuGen = 0;              // 화면에서 무언가 바꾸거나 저장이 실패할 때마다 1씩 오른다
+    let cuPollSeq = 0;          // 조회 요청 일련번호
+    let cuPollApplied = 0;      // 화면에 반영한 마지막 조회의 일련번호 (이보다 먼저 보낸 조회의 응답은 버린다)
+    let cuSaving = false;       // 저장 요청이 서버에 가 있는 동안 true
+    let cuSaveQueued = false;   // 저장 중에 또 바뀐 것이 있으면 true → 끝나자마자 한 번 더 보낸다
+    let cuShrinkOk = false;     // 초기화·삭제·복구처럼 기록이 크게 줄어드는 저장임을 서버에 알린다
+    let cuSaveCbs = [];         // 저장 결과(성공/실패)를 기다리는 뒷일
+    let cuRev = null;           // 서버 데이터 번호 (서버가 저장할 때마다 1씩 오른다)
+    let cuLastSig = '';         // 마지막으로 화면에 반영한 서버 응답 (같으면 다시 그리지 않는다)
+    let cuLoginBusy = false;    // 로그인 요청 중 (두 번 눌림 방지)
+    let cuPatchOk = false;      // 서버가 알바생용 "더하기·빼기 저장(patchMine)"을 지원하는가 (응답의 patch 표시로 안다)
+    let cuPend = cuNewPend();   // 아직 서버에 보내지 않은 알바생 본인의 변경
+    let cuSnap = null;          // 서버가 마지막으로 확인해 준 내용 (저장이 실패하면 화면을 여기로 되돌린다)
+    let cuMustRefresh = false;  // 저장 실패 뒤, 서버 내용을 다시 받아 오기 전까지 true (그동안 새 변경을 받지 않는다)
+    let cuPayrollStale = false; // 입력 중이라 임금대장 표를 다시 그리지 못했다
+    let cuAltPin = null;        // 비밀번호(PIN) 변경을 보냈는데 응답을 받지 못했을 때의 "바꾸려던 값" (서버는 실제로 바꿨을 수 있다)
+    let cuAltPinNotice = false; // 바꾸려던 값으로 다시 인증해 보는 중
+
+    function cuNewPend() {
+      return { add: [], rem: [], me: false };
+    }
+
+    function initGoogleWorkspaceSync() {
+      if (state.gasUrl) {
+        updateCloudStatusBadges(true);
+        fetchCloudData(); // Download from Cloud first
+        if (!cloudPollTimer) {
+          cloudPollTimer = setInterval(fetchCloudData, 5000); // 5 sec auto sync
+        }
+      } else {
+        updateCloudStatusBadges(false);
+      }
+    }
+
+    // 서버에 내는 신분증. 관리자도 "로그인할 때 쓴 비밀번호"로 인증한다.
+    // (비밀번호를 바꾸는 저장 요청은 옛 비밀번호로 인증하고, 새 비밀번호는 내용에 담아 보낸다)
+    function cuAuthParams() {
+      const u = state.currentUser;
+      if (!u) return null;
+      if (u.role === 'admin') return { role: 'admin', pin: u.pin };
+      return { role: 'emp', empId: u.empId, pin: u.pin };
+    }
+
+    // 점포 이름의 옛 표기를 바로잡는다 (화면 안에서만. 관리자가 저장하면 서버에도 바른 이름으로 남는다)
+    function cuNormalizeStores() {
+      state.employees.forEach(e => { if (e && e.store) e.store = migrateStoreName(e.store); });
+      state.shifts.forEach(s => { if (s && s.store) s.store = migrateStoreName(s.store); });
+    }
+
+    function cuTakeSnap() {
+      return JSON.stringify({ employees: state.employees, shifts: state.shifts, extras: state.extras, adminPin: state.adminPin });
+    }
+
+    // 알바생 저장의 응답(=서버의 최신 내용)으로 "확인된 내용"을 만든다 (화면에 반영하지 않는 경우에도 기억해 둔다)
+    function cuSnapFromResponse(d) {
+      const roster = (d.employees || []).slice();
+      if (d.me) {
+        const idx = roster.findIndex(x => x.id === d.me.id);
+        if (idx >= 0) roster[idx] = d.me; else roster.push(d.me);
+      }
+      return JSON.stringify({ employees: roster, shifts: d.shifts || [], extras: d.extras || {}, adminPin: '' });
+    }
+
+    // 화면을 서버가 마지막으로 확인해 준 내용으로 되돌린다
+    function cuRestoreSnap() {
+      if (!cuSnap || !state.currentUser) return;
+      try {
+        const snap = JSON.parse(cuSnap);
+        state.employees = snap.employees || [];
+        state.shifts = snap.shifts || [];
+        state.extras = snap.extras || {};
+        if (state.currentUser.role === 'admin') state.adminPin = snap.adminPin || state.currentUser.pin;
+        cuNormalizeStores();
+      } catch (e) { console.error(e); }
+    }
+
+    // 서버 응답을 화면 데이터로 반영한다. fromLogin = 로그인 직후의 첫 응답
+    function cuApplyServerData(data, fromLogin) {
+      if (!data || data.ok === false) return false;
+      const u = state.currentUser;
+      if (u) {
+        // 로그인한 뒤에는 내 신분에 맞는 응답만 받는다
+        if (data.role !== u.role) return false;
+        if (u.role === 'emp' && data.me && data.me.id !== u.empId) return false;
+      } else if (data.role !== 'guest' && !fromLogin) {
+        return false;   // 로그아웃한 뒤 늦게 도착한 응답
+      }
+
+      if (data.role === 'emp') {
+        const roster = (data.employees || []).slice();
+        if (data.me) {
+          const idx = roster.findIndex(x => x.id === data.me.id);
+          if (idx >= 0) roster[idx] = data.me; else roster.push(data.me);
+        }
+        state.employees = roster;
+        state.shifts = data.shifts || [];
+        state.extras = data.extras || {};   // 본인 추가수당만 온다 (급여명세서용)
+      } else if (data.role === 'admin') {
+        state.employees = data.employees || [];
+        state.shifts = data.shifts || [];
+        state.extras = data.extras || {};
+        if (data.adminPin) state.adminPin = String(data.adminPin);
+      } else if (data.role === 'guest') {
+        state.employees = data.employees || [];
+        state.shifts = [];
+        state.extras = {};
+      } else {
+        return false;   // 모르는 응답은 무시
+      }
+      cuNormalizeStores();
+      if (typeof data.rev === 'number') cuRev = data.rev;
+      cuPatchOk = (data.patch === 1);
+      cuSnap = (data.role === 'guest') ? null : cuTakeSnap();
+      cuMustRefresh = false;
+      cuAltPin = null;            // 지금 비밀번호로 인증이 됐다 → 더 시도해 볼 것이 없다
+      if (cuAltPinNotice) {
+        cuAltPinNotice = false;
+        showToast('비밀번호(PIN) 변경이 서버에 저장된 것을 확인했습니다. 다음 로그인부터 새 값을 쓰세요.', 6000);
+      }
+      cuPersistLocal();
+      return true;
+    }
+
+    function fetchCloudData() {
+      if (!state.gasUrl) return;
+      if (cuSaving || cuSaveQueued) return;     // 저장이 끝난 뒤에 받아 온다
+      const a = cuAuthParams();
+      const epoch = cuEpoch;
+      const gen = cuGen;
+      const seq = ++cuPollSeq;
+      let url = state.gasUrl + (state.gasUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+      if (a) {
+        url += '&role=' + encodeURIComponent(a.role) + '&pin=' + encodeURIComponent(a.pin || '');
+        if (a.empId) url += '&empId=' + encodeURIComponent(a.empId);
+      } else {
+        url += '&mode=roster';
+      }
+      fetch(url)
+        .then(res => res.json())
+        .then(data => {
+          if (epoch !== cuEpoch) return;                             // 그 사이 로그인·로그아웃이 있었다
+          if (cuSaving || cuSaveQueued || gen !== cuGen) return;     // 그 사이 화면에서 바꿨거나 저장이 실패했다 → 옛 응답
+          if (seq < cuPollApplied) return;                           // 더 나중에 보낸 조회가 이미 반영됐다 → 옛 응답
+          cuSetConnBadge(true);
+          if (data && data.ok === false) {
+            if (data.error === 'auth_failed' && state.currentUser) {
+              if (cuAltPin) {
+                // 방금 보낸 비밀번호 변경이 (응답만 못 받았을 뿐) 서버에는 반영됐을 수 있다 → 바꾸려던 값으로 한 번 더 인증해 본다
+                state.currentUser.pin = cuAltPin;
+                if (state.currentUser.role === 'admin') state.adminPin = cuAltPin;
+                cuAltPin = null;
+                cuAltPinNotice = true;
+                fetchCloudData();
+              } else {
+                cuAltPinNotice = false;
+                cuSessionExpired();
+              }
+            }
+            return;
+          }
+          cuPollApplied = seq;
+          const sig = JSON.stringify(data);
+          if (sig === cuLastSig) { cuMustRefresh = false; return; }  // 달라진 것이 없으면 다시 그리지 않는다
+          if (cuApplyServerData(data)) {
+            cuLastSig = sig;
+            populateEmpSelect();
+            if (state.currentUser) render({ fromPoll: true });
+          }
+        })
+        .catch(err => {
+          console.error('Cloud fetch error:', err);
+          if (epoch === cuEpoch) cuSetConnBadge(false);
+        });
+    }
+
+    // 서버와 실제로 통신이 되는지 표시한다
+    function cuSetConnBadge(ok) {
+      if (ok) { updateCloudStatusBadges(true); return; }
+      const loginBadge = document.getElementById('loginCloudStatusBadge');
+      const appBadge = document.getElementById('appCloudBadge');
+      if (loginBadge) { loginBadge.innerText = '⚠️ 서버 연결 안 됨'; loginBadge.className = 'px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800'; }
+      if (appBadge) { appBadge.innerText = '⚠️ 서버 연결 안 됨'; appBadge.className = 'text-[11px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-purple-950'; }
+    }
+
+    // 로그인 화면의 "기본 주소로 되돌리기" 줄을 보이거나 숨긴다
+    function cuUpdateResetRow() {
+      const row = document.getElementById('gasResetRow');
+      if (!row) return;
+      if (state.gasUrl && state.gasUrl !== DEFAULT_GAS_URL) row.classList.remove('hidden');
+      else row.classList.add('hidden');
+    }
+
+    function cuResetServerFromLogin() {
+      if (state.currentUser) return;
+      try { localStorage.removeItem('cu_gas_url'); } catch (err) {}
+      state.gasUrl = DEFAULT_GAS_URL;
+      cuEpoch++; cuGen++; cuLastSig = ''; cuRev = null;
+      cuUpdateResetRow();
+      fetchCloudData();
+      showToast('연동 주소를 기본값으로 되돌렸습니다.', 3000);
+    }
+
+    function updateCloudStatusBadges(connected) {
+      const loginBadge = document.getElementById('loginCloudStatusBadge');
+      const appBadge = document.getElementById('appCloudBadge');
+
+      if (connected) {
+        if (loginBadge) { loginBadge.innerText = '☁️ 실시간 구글 클라우드 연동 중'; loginBadge.className = 'px-2.5 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800'; }
+        if (appBadge) { appBadge.innerText = '☁️ 구글 연동 완료'; appBadge.className = 'text-[11px] px-2 py-0.5 rounded-full font-bold bg-emerald-400 text-purple-950'; }
+      } else {
+        if (loginBadge) { loginBadge.innerText = '로컬 전용 모드'; loginBadge.className = 'px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800'; }
+        if (appBadge) { appBadge.innerText = '로컬 모드'; appBadge.className = 'text-[11px] px-2 py-0.5 rounded-full font-bold bg-amber-400 text-purple-950'; }
+      }
+    }
+
+    // 무언가 바꾸기 전에 부른다. 저장 실패 직후에는, 서버 내용을 다시 받아 오기 전까지 새 변경을 받지 않는다.
+    // (받아 오기 전에 다시 입력하면 같은 근무가 두 번 들어갈 수 있다)
+    function cuReady() {
+      if (!cuMustRefresh) return true;
+      fetchCloudData();
+      showCustomAlert('잠시만요', '서버의 최신 내용을 받아 오는 중입니다.\n2~3초 뒤에 다시 해 주세요.');
+      return false;
+    }
+
+    // SAVE DATA TO CLOUD
+    //  opts.allowShrink : 초기화·삭제·복구처럼 기록이 크게 줄어드는 저장 (화면에서 이미 확인을 받은 경우에만 쓴다)
+    //  opts.onResult(ok): 이 변경이 서버에 저장됐는지(true) 실패했는지(false) 알려 준다
+    function saveData(opts) {
+      cuPersistLocal();
+      if (!state.gasUrl || !cuAuthParams()) return;
+
+      cuGen++;            // 이 시각 이전에 보낸 조회의 응답은 옛 내용이다
+      cuLastSig = '';
+      if (opts && opts.allowShrink) cuShrinkOk = true;
+      if (opts && opts.onResult) cuSaveCbs.push(opts.onResult);
+
+      if (cuSaving) { cuSaveQueued = true; return; }   // 앞선 저장이 끝나면 이어서 보낸다
+      cuSendSave();
+    }
+
+    function cuSendSave() {
+      const a = cuAuthParams();
+      if (!a || !state.gasUrl) {
+        cuSaving = false; cuSaveQueued = false; cuSaveCbs = []; cuShrinkOk = false; cuPend = cuNewPend();
+        return;
+      }
+
+      cuSaving = true;
+      cuSaveQueued = false;
+      const epoch = cuEpoch;
+      const sentGen = cuGen;
+      const cbs = cuSaveCbs; cuSaveCbs = [];
+      const shrink = cuShrinkOk; cuShrinkOk = false;
+
+      let body, sentSnap = null;
+      if (a.role === 'admin') {
+        body = { role: 'admin', pin: a.pin, op: 'replaceAll',
+                 payload: { employees: state.employees, shifts: state.shifts,
+                            extras: state.extras, adminPin: state.adminPin } };
+        if (shrink) body.confirmShrink = true;
+        if (typeof cuRev === 'number') body.baseRev = cuRev;   // 내가 마지막으로 본 서버 데이터 번호
+        sentSnap = JSON.stringify(body.payload);               // 저장되면 이것이 "서버가 확인한 내용"이 된다
+      } else {
+        const me = state.employees.find(e => e.id === a.empId) || null;
+        const pend = cuPend; cuPend = cuNewPend();
+        if (cuPatchOk) {
+          // 내가 더한 것·지운 것만 보낸다 → 그 사이 다른 기기(관리자)가 고친 내 근무를 되돌리지 않는다
+          body = { role: 'emp', empId: a.empId, pin: a.pin, op: 'patchMine',
+                   payload: { addShifts: pend.add, removeShiftIds: pend.rem } };
+          if (pend.me && me) {
+            body.payload.me = { pin: me.pin, bankName: me.bankName, accountHolder: me.accountHolder,
+                                accountNumber: me.accountNumber, idType: me.idType, idNumber: me.idNumber };
+          }
+        } else {
+          // 옛 서버: 본인 근무 목록을 통째로 보낸다
+          body = { role: 'emp', empId: a.empId, pin: a.pin, op: 'syncMine',
+                   payload: { me: me, shifts: state.shifts.filter(s => s.empId === a.empId) } };
+        }
+      }
+
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;   // 30초 넘게 답이 없으면 실패로 본다
+
+      let result = null;   // 서버 응답 (받지 못하면 null)
+      fetch(state.gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+        signal: ctrl ? ctrl.signal : undefined
+      })
+      .then(res => res.json())
+      .then(d => { result = d; })
+      .catch(err => { console.error('Cloud save error:', err); })
+      .then(() => {
+        if (timer) clearTimeout(timer);
+        if (epoch !== cuEpoch) return;   // 그 사이 로그아웃·재로그인 → 이 저장의 뒷일은 하지 않는다
+        cuSaving = false;
+        if (result && result.ok !== false) cuSaveSucceeded(a, result, cbs, sentGen, sentSnap);
+        else cuSaveFailed(result, cbs);
+      });
+    }
+
+    function cuSaveSucceeded(a, d, cbs, sentGen, sentSnap) {
+      if (typeof d.rev === 'number') cuRev = d.rev;
+      cuPatchOk = (d.patch === 1);
+      cuSnap = (a.role === 'admin') ? sentSnap : cuSnapFromResponse(d);   // 서버가 확인한 내용을 기억해 둔다
+      cuMustRefresh = false;
+
+      if (a.role === 'admin' && d.adminPin && state.currentUser) {
+        // 관리자 비밀번호를 바꿨다면, 이후 요청은 새 비밀번호로 인증한다
+        state.currentUser.pin = String(d.adminPin);
+        if (!cuSaveQueued) state.adminPin = String(d.adminPin);
+      }
+      cbs.forEach(cb => { try { cb(true); } catch (e) { console.error(e); } });
+
+      if (cuSaveQueued) { cuSendSave(); return; }   // 저장하는 동안 또 바뀐 것이 있으면 이어서 보낸다
+
+      // 알바생: 서버가 돌려준 최신 내용을 화면에 반영한다 (그 사이 또 바꾼 것이 없을 때)
+      if (a.role !== 'admin' && cuGen === sentGen) {
+        if (cuApplyServerData(d)) render({ fromPoll: true });
+      }
+    }
+
+    function cuSaveFailed(d, cbs) {
+      const all = cbs.concat(cuSaveCbs);
+      cuSaveCbs = []; cuSaveQueued = false; cuShrinkOk = false;
+      cuPend = cuNewPend();
+      cuGen++;            // 이 시각 이전에 보낸 조회의 응답은 버린다
+      cuLastSig = '';
+
+      const code = d && d.error;
+      const info = { code: code || null, noResponse: !d };   // noResponse = 서버 응답을 받지 못함 (저장됐을 수도, 안 됐을 수도 있다)
+      if (code === 'auth_failed') {
+        all.forEach(cb => { try { cb(false, info); } catch (e) { console.error(e); } });
+        cuSessionExpired('로그인 정보가 맞지 않아 방금 변경은 저장되지 않았습니다.\n다시 로그인한 뒤 한 번 더 해 주세요.');
+        return;
+      }
+
+      // 화면을 서버가 마지막으로 확인해 준 내용으로 "즉시" 되돌린다.
+      // (다시 받아 오는 것이 늦거나 실패해도, 저장되지 않은 변경이 화면에 남아 있지 않게)
+      cuRestoreSnap();
+      cuMustRefresh = true;
+      all.forEach(cb => { try { cb(false, info); } catch (e) { console.error(e); } });
+      populateEmpSelect();
+      render();
+
+      let msg = '방금 변경이 서버에 저장됐는지 확인하지 못했습니다.\n화면을 서버 내용으로 되돌렸습니다.\n잠시 뒤 화면을 확인하고, 방금 한 변경이 보이지 않을 때만 다시 해 주세요.';
+      if (code === 'stale') msg = '다른 기기에서 방금 변경이 있었습니다.\n화면을 최신 내용으로 바꿨으니, 방금 하신 작업을 한 번 더 해 주세요.';
+      else if (code === 'unsafe_shrink' || code === 'unsafe_payload') msg = '기록이 한꺼번에 많이 지워지는 요청이라 서버가 막았습니다.\n새로고침한 뒤 다시 해 주세요.';
+      else if (code === 'busy') msg = '서버가 잠시 바빠 저장하지 못했습니다.\n조금 뒤에 다시 해 주세요.';
+      else if (code === 'storage_error') msg = '서버 저장 공간에 문제가 있어 저장하지 못했습니다.\n대표님께 알려 주세요.';
+      else if (code) msg = '서버가 요청을 받지 않아 저장하지 못했습니다.\n새로고침한 뒤 다시 해 주세요.';
+      showCustomAlert('저장 실패', msg);
+
+      fetchCloudData();   // 이어서 서버의 최신 내용을 받아 온다
+    }
+
+    // 로그인 정보가 더 이상 맞지 않을 때 (PIN 이 다른 기기에서 바뀜 등)
+    function cuSessionExpired(message) {
+      cuDoLogout();
+      showCustomAlert('다시 로그인해 주세요', message || '비밀번호(PIN)가 바뀌었거나 로그인 정보가 맞지 않습니다.\n다시 로그인해 주세요.');
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      cuFillStoreSelects();
+      const verEl = document.getElementById('clientVerText');
+      if (verEl) verEl.innerText = CU_CLIENT_VER;
+
+      // 추가수당 칸에 입력하는 동안 미뤄 둔 임금대장 표를, 칸에서 나올 때 다시 그린다
+      document.getElementById('payrollTablesContainer').addEventListener('focusout', () => {
+        setTimeout(() => {
+          const c = document.getElementById('payrollTablesContainer');
+          const isAdmin = state.currentUser && state.currentUser.role === 'admin';
+          if (cuPayrollStale && isAdmin && !c.contains(document.activeElement)) renderPayrollTable();
+        }, 0);
+      });
+
+      cuUpdateResetRow();
+      initGoogleWorkspaceSync();
+      populateEmpSelect();
+    });
+
+    // 화면으로 돌아오면 5초를 기다리지 않고 바로 최신 내용을 받아 온다
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) fetchCloudData();
+    });
+
+    // 저장이 끝나기 전에 창을 닫으려 하면 한 번 묻는다
+    window.addEventListener('beforeunload', (e) => {
+      if (cuSaving || cuSaveQueued) { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    // CLOUD CONFIG MODAL
+    function openCloudModal() {
+      document.getElementById('cfgGasUrl').value = state.gasUrl || '';
+      document.getElementById('cloudModal').classList.remove('hidden');
+    }
+
+    function closeCloudModal() {
+      document.getElementById('cloudModal').classList.add('hidden');
+    }
+
+    // 연동 주소를 바꾼다. 주소가 바뀌면 처음부터 다시 시작한다:
+    // 새 서버에서 명단을 받아 오고 다시 로그인한다. (화면에 있던 내용으로 새 서버를 덮어쓰지 않는다)
+    function cuApplyServerSwitch(url, title, message) {
+      try {
+        if (url === DEFAULT_GAS_URL) localStorage.removeItem('cu_gas_url');
+        else localStorage.setItem('cu_gas_url', url);
+      } catch (err) {}
+      state.gasUrl = url;
+      closeCloudModal();
+      updateCloudStatusBadges(true);
+      cuDoLogout();
+      cuUpdateResetRow();
+      if (!cloudPollTimer) cloudPollTimer = setInterval(fetchCloudData, 5000);
+      showCustomAlert(title, message);
+    }
+
+    let cuSwitchBusy = false;
+    function cuSwitchServer(url, title, message) {
+      if (cuSaving || cuSaveQueued) {
+        showCustomAlert('저장 중입니다', '방금 변경을 서버에 저장하고 있습니다.\n2~3초 뒤에 다시 눌러 주세요.');
+        return;
+      }
+      if (url === DEFAULT_GAS_URL) { cuApplyServerSwitch(url, title, message); return; }   // 기본 주소는 확인 없이 되돌린다
+
+      // 새 주소가 실제로 이 앱의 서버인지(명단 조회가 되는지) 먼저 확인한다.
+      // 확인 없이 바꾸면, 주소를 잘못 적었을 때 이 기기에서 다시 로그인할 수 없게 된다.
+      if (cuSwitchBusy) return;
+      cuSwitchBusy = true;
+      showToast('연동 주소를 확인하는 중입니다...', 3000);
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 15000) : null;
+      let ok = false;
+      fetch(url + (url.includes('?') ? '&' : '?') + 'mode=roster&_t=' + Date.now(), { signal: ctrl ? ctrl.signal : undefined })
+        .then(r => r.json())
+        .then(d => { ok = !!(d && d.ok === true && d.role === 'guest' && Array.isArray(d.employees)); })
+        .catch(err => { console.error('Server probe error:', err); })
+        .then(() => {
+          if (timer) clearTimeout(timer);
+          cuSwitchBusy = false;
+          if (!ok) {
+            showCustomAlert('주소 확인 실패', '이 주소에서 서버 응답을 받지 못했습니다.\n주소를 다시 확인해 주세요. (연동 주소는 바꾸지 않았습니다)');
+            return;
+          }
+          if (cuSaving || cuSaveQueued || !state.currentUser) return;
+          cuApplyServerSwitch(url, title, message);
+        });
+    }
+
+    function saveCloudConfig(e) {
+      e.preventDefault();
+      const url = document.getElementById('cfgGasUrl').value.trim();
+
+      if (!url) {
+        showCustomAlert('입력 오류', 'Google Apps Script 웹 앱 URL을 입력해주세요.');
+        return;
+      }
+      cuSwitchServer(url, '연동 주소 저장', '연동 주소를 저장했습니다.\n다시 로그인해 주세요.');
+    }
+
+    // 이 기기에만 따로 저장해 둔 연동 주소를 지우고, 기본 주소로 되돌린다
+    function clearCloudConfig() {
+      cuSwitchServer(DEFAULT_GAS_URL, '기본 주소로 되돌림', '이 기기의 연동 주소를 기본값으로 되돌렸습니다.\n다시 로그인해 주세요.');
+    }
+
+    // MONTHLY DATA RESET
+    function resetMonthData() {
+      if (!cuReady()) return;
+      const monthStr = `${state.year}년 ${state.month + 1}월`;
+      showCustomConfirm('현재 월 근무기록 초기화', `[${monthStr}]의 모든 알바생 근무 기록만 삭제됩니다.\n(알바생 명단 및 타 월 데이터는 보존됩니다)\n정말 삭제하시겠습니까?`, () => {
+        state.shifts = state.shifts.filter(s => {
+          const [y, m] = s.date.split('-').map(Number);
+          return !(y === state.year && m === (state.month + 1));
+        });
+
+        Object.keys(state.extras).forEach(k => {
+          if (k.endsWith(`_${state.year}_${state.month + 1}`)) {
+            delete state.extras[k];
+          }
+        });
+
+        saveData({ allowShrink: true, onResult: (ok) => {
+          if (ok) showToast(`${monthStr} 근무 기록이 깨끗하게 초기화되었습니다.`, 3000);
+        }});
+        render();
+      });
+    }
+
+    function setLoginRole(role) {
+      if (role === 'emp') {
+        document.getElementById('empLoginForm').classList.remove('hidden');
+        document.getElementById('adminLoginForm').classList.add('hidden');
+        document.getElementById('roleBtnEmp').className = 'py-2.5 rounded-lg bg-white shadow-sm text-purple-900';
+        document.getElementById('roleBtnAdmin').className = 'py-2.5 rounded-lg text-slate-500';
+      } else {
+        document.getElementById('empLoginForm').classList.add('hidden');
+        document.getElementById('adminLoginForm').classList.remove('hidden');
+        document.getElementById('roleBtnAdmin').className = 'py-2.5 rounded-lg bg-white shadow-sm text-purple-900';
+        document.getElementById('roleBtnEmp').className = 'py-2.5 rounded-lg text-slate-500';
+      }
+    }
+
+    // 로그인 화면의 이름 목록 (점포 순서 → 이름 순서)
+    let cuEmpSelectHtml = null;
+    function populateEmpSelect() {
+      const select = document.getElementById('loginEmpSelect');
+      const activeEmps = cuSortedActiveEmps();
+      const html = activeEmps.length === 0
+        ? '<option value="">등록된 알바생이 없습니다</option>'
+        : activeEmps.map(e => `<option value="${esc(e.id)}">[${esc(e.store)}] ${esc(e.name)}</option>`).join('');
+      if (html === cuEmpSelectHtml) return;   // 명단이 그대로면 손대지 않는다 (골라 둔 이름이 풀리지 않게)
+      const prev = select.value;
+      select.innerHTML = html;
+      cuEmpSelectHtml = html;
+      if (prev && Array.from(select.options).some(o => o.value === prev)) select.value = prev;
+    }
+
+    function cuServerLogin(body, okCb) {
+      if (!state.gasUrl) { showCustomAlert('연결 오류', '구글 연동이 설정되지 않았습니다.'); return; }
+      if (cuLoginBusy) return;
+      cuLoginBusy = true;
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 20000) : null;   // 20초 넘게 답이 없으면 실패로 본다
+      fetch(state.gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ op: 'login' }, body)),
+        signal: ctrl ? ctrl.signal : undefined
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (timer) clearTimeout(timer);
+        cuLoginBusy = false;
+        if (!d || d.ok === false || d.role !== body.role) {
+          showCustomAlert('로그인 실패', '비밀번호(PIN)가 일치하지 않습니다.');
+          return;
+        }
+        if (state.currentUser) return;   // 이미 로그인된 상태 (응답이 겹쳐 온 경우)
+        cuEpoch++;                       // 로그인 전에 보낸 조회 응답은 이제부터 버린다
+        cuSaving = false; cuSaveQueued = false; cuSaveCbs = []; cuShrinkOk = false;
+        cuGen++; cuLastSig = ''; cuPend = cuNewPend(); cuSnap = null; cuMustRefresh = false;
+        cuAltPin = null; cuAltPinNotice = false;
+        if (!cuApplyServerData(d, true)) {
+          showCustomAlert('로그인 실패', '서버 응답을 읽지 못했습니다. 새로고침한 뒤 다시 해 주세요.');
+          return;
+        }
+        okCb(d);
+      })
+      .catch(err => {
+        if (timer) clearTimeout(timer);
+        cuLoginBusy = false;
+        console.error('Login error:', err);
+        showCustomAlert('연결 오류', '서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.');
+      });
+    }
+
+    function handleEmpLogin(e) {
+      e.preventDefault();
+      const empId = document.getElementById('loginEmpSelect').value;
+      const inputPin = String(document.getElementById('loginEmpPin').value).trim();
+      if (!empId) { showCustomAlert('로그인 실패', '이름을 선택해 주세요.'); return; }
+
+      cuServerLogin({ role: 'emp', empId: empId, pin: inputPin }, (d) => {
+        const me = d.me || state.employees.find(x => x.id === empId) || {};
+        state.currentUser = { role: 'emp', empId: empId, name: me.name || '', store: me.store || '', pin: inputPin };
+        startApp();
+      });
+    }
+
+    function handleAdminLogin(e) {
+      e.preventDefault();
+      const pin = String(document.getElementById('loginAdminPin').value).trim();
+      cuServerLogin({ role: 'admin', pin: pin }, () => {
+        state.adminPin = pin;
+        state.currentUser = { role: 'admin', name: '대표님', pin: pin };
+        startApp();
+      });
+    }
+
+    function startApp() {
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appContainer').classList.remove('hidden');
+
+      const isAdmin = state.currentUser.role === 'admin';
+
+      if (isAdmin) {
+        document.getElementById('adminPinBtn').classList.remove('hidden');
+        document.getElementById('cloudSetupBtn').classList.remove('hidden');
+        document.getElementById('empProfileBtn').classList.add('hidden');
+        document.getElementById('empPayslipBtn').classList.add('hidden');
+        document.getElementById('kpiWageCard').classList.remove('hidden');
+        document.getElementById('kpiEmpCard').classList.remove('hidden');
+        document.getElementById('storeFilter').classList.remove('hidden');
+        document.getElementById('userInfoBadge').innerText = '점주(관리자) 모드';
+        document.getElementById('kpiLabelHours').innerText = '선택 점포 총 근무시간';
+      } else {
+        document.getElementById('adminPinBtn').classList.add('hidden');
+        document.getElementById('cloudSetupBtn').classList.add('hidden');
+        document.getElementById('empProfileBtn').classList.remove('hidden');
+        document.getElementById('empPayslipBtn').classList.remove('hidden');
+        document.getElementById('kpiWageCard').classList.add('hidden');
+        document.getElementById('kpiEmpCard').classList.add('hidden');
+        document.getElementById('storeFilter').classList.add('hidden');
+        document.getElementById('userInfoBadge').innerText = `${state.currentUser.store} · ${state.currentUser.name}님 접속 중`;
+        document.getElementById('kpiLabelHours').innerText = '내 이번 달 총 근무시간';
+      }
+
+      switchTab('calendar');
+      render();
+    }
+
+    function logout() {
+      if (cuSaving || cuSaveQueued) {
+        showCustomAlert('저장 중입니다', '방금 변경을 서버에 저장하고 있습니다.\n2~3초 뒤에 다시 눌러 주세요.');
+        return;
+      }
+      cuDoLogout();
+    }
+
+    function cuDoLogout() {
+      cuEpoch++;   // 이 시각 이전에 보낸 요청의 응답은 모두 버린다
+      cuSaving = false; cuSaveQueued = false; cuSaveCbs = []; cuShrinkOk = false;
+      cuGen++; cuLastSig = ''; cuRev = null; cuPend = cuNewPend(); cuSnap = null; cuMustRefresh = false;
+      cuPayrollStale = false; cuAltPin = null; cuAltPinNotice = false;
+
+      // 화면에 올라와 있던 개인정보·근무기록을 지운다 (이름 명단만 남긴다)
+      state.currentUser = null;
+      state.employees = cuRosterOnly(state.employees);
+      state.shifts = [];
+      state.extras = {};
+      state.adminPin = '';
+      state.currentPayslipData = null;
+      cuPersistLocal();
+
+      ['shiftModal', 'payslipModal', 'selfProfileModal', 'employeeModal', 'adminPinModal', 'cloudModal', 'storeReviewModal'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+      });
+      ['payrollTablesContainer', 'employeeCardsGrid', 'storeReviewList', 'storeReviewNotice', 'calendarGrid', 'dayShiftList'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '';
+      });
+      ['psName', 'psRRN', 'psBank', 'psAccount'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = '';
+      });
+      // 입력 칸에 남아 있던 주민번호·계좌·비밀번호도 지운다
+      ['employeeForm', 'selfProfileForm', 'shiftForm'].forEach(id => {
+        const f = document.getElementById(id);
+        if (f) f.reset();
+      });
+      ['empId', 'curAdminPinInput', 'newAdminPinInput', 'confirmAdminPinInput'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+
+      document.getElementById('appContainer').classList.add('hidden');
+      document.getElementById('loginScreen').classList.remove('hidden');
+      document.getElementById('loginEmpPin').value = '';
+      document.getElementById('loginAdminPin').value = '';
+      populateEmpSelect();
+      fetchCloudData();
+    }
+
+    // opts.fromPoll = 서버에서 새 내용을 받아 다시 그리는 경우 (입력 중인 칸은 건드리지 않는다)
+    function render(opts) {
+      updateHeaderAndKPI();
+      renderCalendar();
+      renderStoreReviewNotice();
+      if (state.currentUser && state.currentUser.role === 'admin') {
+        renderPayrollTable(opts);
+        renderEmployeeCards();
+      }
+    }
+
+    function updateHeaderAndKPI() {
+      document.getElementById('currentMonthStr').innerText = `${state.year}년 ${state.month + 1}월`;
+
+      const monthShifts = getFilteredShifts();
+      const totalHours = monthShifts.reduce((acc, curr) => acc + (Number(curr.hours) || 0), 0);
+
+      document.getElementById('statTotalHours').innerText = `${totalHours.toLocaleString()} 시간`;
+
+      if (state.currentUser.role === 'admin') {
+        let totalWage = 0;
+        monthShifts.forEach(s => {
+          const emp = state.employees.find(e => e.id === s.empId);
+          totalWage += (Number(s.hours) || 0) * cuRate(emp);   // 삭제된 알바생의 근무는 금액에 넣지 않는다 (임금대장과 같게)
+        });
+
+        // 추가수당(교통비 등)은 고른 점포에 소속된 알바생 것만 더한다
+        state.employees.forEach(e => {
+          if (state.currentStore === '전체' || e.store === state.currentStore) {
+            totalWage += getEmpExtraPay(e.id, state.year, state.month + 1);
+          }
+        });
+
+        document.getElementById('statTotalWage').innerText = `${Math.round(totalWage).toLocaleString()} 원`;
+
+        const activeEmps = state.employees.filter(e => {
+          const matchStore = state.currentStore === '전체' || e.store === state.currentStore;
+          return matchStore && !e.resignDate;
+        });
+        document.getElementById('statEmployeeCount').innerText = `${activeEmps.length} 명`;
+      }
+    }
+
+    function getFilteredShifts() {
+      return state.shifts.filter(s => {
+        const [y, m] = s.date.split('-').map(Number);
+        const matchMonth = y === state.year && m === (state.month + 1);
+        
+        if (state.currentUser.role === 'emp') {
+          return matchMonth && s.empId === state.currentUser.empId;
+        } else {
+          const matchStore = state.currentStore === '전체' || shiftStoreOf(s) === state.currentStore;
+          return matchMonth && matchStore;
+        }
+      });
+    }
+
+    function changeStoreFilter(val) {
+      state.currentStore = val;
+      render();
+    }
+
+    function changeMonth(delta) {
+      state.month += delta;
+      if (state.month < 0) { state.month = 11; state.year -= 1; }
+      else if (state.month > 11) { state.month = 0; state.year += 1; }
+      render();
+    }
+
+    // CALENDAR RENDER
+    function renderCalendar() {
+      const grid = document.getElementById('calendarGrid');
+      grid.innerHTML = '';
+
+      const firstDay = new Date(state.year, state.month, 1).getDay();
+      const daysInMonth = new Date(state.year, state.month + 1, 0).getDate();
+
+      for (let i = 0; i < firstDay; i++) {
+        grid.appendChild(document.createElement('div'));
+      }
+
+      const filteredShifts = getFilteredShifts();
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${state.year}-${String(state.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const dayShifts = filteredShifts.filter(s => s.date === dateStr);
+
+        const dateObj = new Date(state.year, state.month, day);
+        const dayOfWeek = dateObj.getDay();
+        let dayColor = 'text-slate-700';
+        if (dayOfWeek === 0) dayColor = 'text-red-500 font-bold';
+        if (dayOfWeek === 6) dayColor = 'text-blue-500 font-bold';
+
+        const cell = document.createElement('div');
+        cell.className = 'bg-white min-h-[100px] p-2 rounded-xl border border-slate-200 hover:border-purple-400 cursor-pointer transition flex flex-col justify-between group shadow-sm';
+        cell.onclick = () => openShiftModal(dateStr);
+
+        let shiftsHtml = dayShifts.map(s => {
+          const emp = state.employees.find(e => e.id === s.empId);
+          const empName = emp ? emp.name : '미지정';
+          let badgeColor = 'bg-amber-100 text-amber-800 border-amber-200';
+          if (s.type === '야간') badgeColor = 'bg-indigo-100 text-indigo-800 border-indigo-200';
+          if (s.type === '대타') badgeColor = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+
+          return `
+            <div class="text-[11px] p-1 rounded-lg border ${badgeColor} font-semibold truncate flex justify-between">
+              <span>${esc(empName)}</span>
+              <span class="font-bold ml-1">${esc(s.hours)}h</span>
+            </div>
+          `;
+        }).join('');
+
+        cell.innerHTML = `
+          <div>
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-sm font-black ${dayColor}">${day}</span>
+              <span class="text-[10px] text-purple-600 font-bold">+ 등록</span>
+            </div>
+            <div class="space-y-1">${shiftsHtml}</div>
+          </div>
+        `;
+        grid.appendChild(cell);
+      }
+    }
+
+    // EXTRA PAY MANAGEMENT
+    function getEmpExtraPay(empId, year, month) {
+      const key = `${empId}_${year}_${month}`;
+      return state.extras[key] || 0;
+    }
+
+    function updateEmpExtraPay(empId, val) {
+      if (!cuReady()) { render(); return; }
+      const amount = parseFloat(val) || 0;
+      const key = `${empId}_${state.year}_${state.month + 1}`;
+      state.extras[key] = amount;
+      saveData({ onResult: (ok) => { if (ok) showToast('추가수당(교통비)이 저장되었습니다.'); } });
+      render();
+    }
+
+    // PAYSLIP MODAL SYSTEM
+    function openPayslipModal(empId) {
+      const emp = state.employees.find(e => e.id === empId);
+      if (!emp) return;
+
+      const currentMonthShifts = state.shifts.filter(s => {
+        const [y, m] = s.date.split('-').map(Number);
+        return y === state.year && m === (state.month + 1) && s.empId === emp.id;
+      });
+
+      const totalHours = currentMonthShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
+      const basicPay = Math.round(totalHours * cuRate(emp));
+      const extraPay = getEmpExtraPay(emp.id, state.year, state.month + 1);
+      const grossSubtotal = basicPay + extraPay;
+
+      const taxDeduction = parseFloat((grossSubtotal * 0.033).toFixed(1));
+      const netSalary = parseFloat((grossSubtotal - taxDeduction).toFixed(1));
+
+      const storeShortName = String(emp.store || '').replace('씨유', '');
+
+      state.currentPayslipData = {
+        emp,
+        year: state.year,
+        month: state.month + 1,
+        storeShortName,
+        totalHours,
+        basicPay,
+        extraPay,
+        grossSubtotal,
+        taxDeduction,
+        netSalary
+      };
+
+      document.getElementById('payslipTitle').innerText = `${emp.name} 님 ${state.year}년 ${state.month + 1}월 급여명세서`;
+      document.getElementById('payslipHeaderDoc').innerText = `급여명세서 (${state.year}년 ${state.month + 1}월)`;
+      document.getElementById('psStore').innerText = storeShortName;
+      document.getElementById('psName').innerText = emp.name;
+      document.getElementById('psRRN').innerText = emp.idNumber || '미입력';
+      document.getElementById('psBank').innerText = emp.bankName || '미입력';
+      document.getElementById('psAccount').innerText = emp.accountNumber || '미입력';
+
+      document.getElementById('psNetSalary').innerText = netSalary.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+      document.getElementById('psBasicPay').innerText = basicPay.toLocaleString();
+      document.getElementById('psHourlyRate').innerText = cuRate(emp).toLocaleString();
+      document.getElementById('psHours').innerText = totalHours;
+      document.getElementById('psExtraPay').innerText = extraPay.toLocaleString();
+      document.getElementById('psGrossSubtotal').innerText = grossSubtotal.toLocaleString();
+
+      document.getElementById('psTaxDeduction').innerText = taxDeduction.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+      document.getElementById('psDeductSubtotal').innerText = taxDeduction.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+
+      document.getElementById('payslipModal').classList.remove('hidden');
+    }
+
+    function openCurrentEmpPayslip() {
+      if (state.currentUser && state.currentUser.role === 'emp') {
+        openPayslipModal(state.currentUser.empId);
+      }
+    }
+
+    function closePayslipModal() {
+      document.getElementById('payslipModal').classList.add('hidden');
+    }
+
+    function copyKakaoPayslipText() {
+      if (!state.currentPayslipData) return;
+      const d = state.currentPayslipData;
+
+      const kakaoMsg = `[CU ${d.storeShortName} ${d.year}년 ${d.month}월 급여명세서]
+👤 성명: ${d.emp.name}
+🏪 근무지: ${d.emp.store}
+🆔 주민번호: ${d.emp.idNumber || '미입력'}
+🏦 계좌: ${d.emp.bankName || ''} ${d.emp.accountNumber || '미입력'}
+
+------------------------
+💰 [급여 항목]
+- 시급: ${cuRate(d.emp).toLocaleString()}원
+- 근무시간: ${d.totalHours}시간
+- 기본급: ${d.basicPay.toLocaleString()}원
+- 추가수당(교통비 등): ${d.extraPay.toLocaleString()}원
+- 급여 소계: ${d.grossSubtotal.toLocaleString()}원
+
+🔻 [공제 항목]
+- 원천징수 (3.3%): ${d.taxDeduction.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}원
+- 공제 소계: ${d.taxDeduction.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}원
+
+------------------------
+✨ [최종 지급액]: ${d.netSalary.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}원
+------------------------
+수고 많으셨습니다! 감사합니다.`;
+
+      navigator.clipboard.writeText(kakaoMsg).then(() => {
+        showToast('카카오톡 전송용 텍스트가 복사되었습니다!');
+      }).catch(() => {
+        showCustomAlert('복사 완료', '클립보드에 복사되었습니다.');
+      });
+    }
+
+    // ADMIN PASSWORD MODAL
+    function openAdminPinModal() {
+      document.getElementById('curAdminPinInput').value = '';
+      document.getElementById('newAdminPinInput').value = '';
+      document.getElementById('confirmAdminPinInput').value = '';
+      document.getElementById('adminPinModal').classList.remove('hidden');
+    }
+
+    function closeAdminPinModal() {
+      document.getElementById('adminPinModal').classList.add('hidden');
+    }
+
+    function saveAdminPin(e) {
+      e.preventDefault();
+      const curPin = String(document.getElementById('curAdminPinInput').value).trim();
+      const newPin = String(document.getElementById('newAdminPinInput').value).trim();
+      const confirmPin = String(document.getElementById('confirmAdminPinInput').value).trim();
+      if (!cuReady()) return;
+
+      if (curPin !== String(state.currentUser.pin)) {
+        showCustomAlert('비밀번호 오류', '현재 관리자 비밀번호가 일치하지 않습니다.');
+        return;
+      }
+
+      if (newPin.length < 4) {
+        showCustomAlert('비밀번호 오류', '새 비밀번호는 최소 4자리 이상이어야 합니다.');
+        return;
+      }
+
+      if (newPin !== confirmPin) {
+        showCustomAlert('비밀번호 오류', '새 비밀번호 확인이 일치하지 않습니다.');
+        return;
+      }
+
+      // 저장 요청은 "지금 비밀번호"로 인증하고, 새 비밀번호는 내용에 담아 보낸다.
+      // 서버가 저장했다고 답한 뒤에야 새 비밀번호로 넘어간다.
+      const oldPin = state.adminPin;
+      state.adminPin = newPin;
+      closeAdminPinModal();
+      saveData({ onResult: (ok, info) => {
+        if (ok) { showToast('관리자 비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 쓰세요.', 5000); return; }
+        state.adminPin = oldPin;
+        if (info && info.noResponse) cuAltPin = newPin;   // 응답만 못 받았을 수 있다 → 다음 조회에서 확인한다
+      }});
+    }
+
+    // EMPLOYEE SELF PROFILE MODAL
+    function openSelfProfileModal() {
+      const emp = state.employees.find(e => e.id === state.currentUser.empId);
+      if (!emp) return;
+
+      document.getElementById('selfPin').value = emp.pin || '1234';
+      document.getElementById('selfBankName').value = emp.bankName || '';
+      document.getElementById('selfAccountHolder').value = emp.accountHolder || emp.name;
+      document.getElementById('selfAccountNumber').value = emp.accountNumber || '';
+      document.getElementById('selfIdType').value = emp.idType || 'resident';
+      document.getElementById('selfIdNumber').value = emp.idNumber || '';
+
+      toggleSelfIdInput();
+      document.getElementById('selfProfileModal').classList.remove('hidden');
+    }
+
+    function closeSelfProfileModal() {
+      document.getElementById('selfProfileModal').classList.add('hidden');
+    }
+
+    function toggleSelfIdInput() {
+      const type = document.getElementById('selfIdType').value;
+      const container = document.getElementById('selfIdNumberContainer');
+      const label = document.getElementById('selfIdLabel');
+
+      if (type === 'none') {
+        container.classList.add('hidden');
+      } else {
+        container.classList.remove('hidden');
+        label.innerText = type === 'resident' ? '주민등록번호' : '외국인등록번호';
+      }
+    }
+
+    function saveSelfProfile(e) {
+      e.preventDefault();
+      const emp = state.employees.find(e => e.id === state.currentUser.empId);
+      if (!emp) return;
+      if (!cuReady()) return;
+
+      const newPin = String(document.getElementById('selfPin').value).trim();
+      if (!/^[0-9]{4}$/.test(newPin)) {
+        showCustomAlert('PIN 오류', 'PIN 번호는 반드시 4자리 숫자여야 합니다.');
+        return;
+      }
+
+      emp.pin = newPin;
+      emp.bankName = document.getElementById('selfBankName').value.trim();
+      emp.accountHolder = document.getElementById('selfAccountHolder').value.trim();
+      emp.accountNumber = document.getElementById('selfAccountNumber').value.trim();
+      emp.idType = document.getElementById('selfIdType').value;
+      emp.idNumber = document.getElementById('selfIdNumber').value.trim();
+
+      // 저장 요청은 "지금 PIN"으로 인증한다. 서버가 저장했다고 답한 뒤에야 새 PIN 으로 넘어간다.
+      // (넘어가지 않으면 PIN 을 바꾼 직후의 모든 요청이 거부된다)
+      closeSelfProfileModal();
+      cuPend.me = true;   // 내 정보가 바뀌었음 (이때만 서버에 내 정보를 보낸다)
+      const pinChanged = newPin !== String(state.currentUser.pin);
+      saveData({ onResult: (ok, info) => {
+        if (!ok) {
+          if (pinChanged && info && info.noResponse) cuAltPin = newPin;   // 응답만 못 받았을 수 있다 → 다음 조회에서 확인한다
+          return;
+        }
+        if (state.currentUser && state.currentUser.role === 'emp') state.currentUser.pin = newPin;
+        showToast('내 정보 및 PIN 번호가 성공적으로 저장되었습니다.');
+      }});
+    }
+
+    // 근무 입력 창의 "근무 점포" 기본값을 정한다. (다른 점포에서 일한 날은 직접 바꾸면 된다)
+    //  · 관리자가 점포 하나를 골라 보고 있을 때 → 그 점포
+    //  · 그 밖에는 → 그 알바생의 소속 점포
+    function cuSetShiftStoreFor(empId) {
+      const sel = document.getElementById('shiftStore');
+      const u = state.currentUser;
+      if (u && u.role === 'admin' && STORES.includes(state.currentStore)) {
+        sel.value = state.currentStore;
+        return;
+      }
+      const home = cuHomeStore(empId);
+      if (home) sel.value = home;
+      else sel.selectedIndex = -1;   // 소속 점포를 모르면 비워 둔다 → 직접 고르게 한다
+    }
+
+    // SHIFT MODAL WITH AUTO-CLOSE
+    function openShiftModal(dateStr) {
+      state.selectedDate = dateStr;
+      document.getElementById('modalShiftDateTitle').innerText = `${dateStr} 근무 입력`;
+
+      const empSelect = document.getElementById('shiftEmpId');
+      empSelect.innerHTML = '';
+
+      if (state.currentUser.role === 'emp') {
+        empSelect.innerHTML = `<option value="${esc(state.currentUser.empId)}">${esc(state.currentUser.name)}</option>`;
+        empSelect.disabled = true;
+      } else {
+        empSelect.disabled = false;
+        const activeEmps = cuSortedActiveEmps();
+        activeEmps.forEach(emp => {
+          const opt = document.createElement('option');
+          opt.value = emp.id;
+          opt.innerText = `[${emp.store}] ${emp.name}`;
+          empSelect.appendChild(opt);
+        });
+        // 점포 하나를 골라 보고 있을 때는 그 점포 알바생을 먼저 보여 준다
+        if (state.currentStore !== '전체') {
+          const first = activeEmps.find(e => e.store === state.currentStore);
+          if (first) empSelect.value = first.id;
+        }
+      }
+      cuSetShiftStoreFor(empSelect.value);
+
+      renderDayShiftList();
+      document.getElementById('shiftModal').classList.remove('hidden');
+    }
+
+    function closeShiftModal() {
+      document.getElementById('shiftModal').classList.add('hidden');
+    }
+
+    let cuDayShiftIds = [];   // 지금 근무 입력 창에 나열된 근무의 ID (삭제 버튼은 순번으로 가리킨다 — ID 글자를 화면 코드에 끼워 넣지 않는다)
+    function renderDayShiftList() {
+      const container = document.getElementById('dayShiftList');
+      let dayShifts = state.shifts.filter(s => s.date === state.selectedDate);
+
+      if (state.currentUser.role === 'emp') {
+        dayShifts = dayShifts.filter(s => s.empId === state.currentUser.empId);
+      }
+
+      cuDayShiftIds = dayShifts.map(s => s.id);
+      if (dayShifts.length === 0) {
+        container.innerHTML = `<p class="text-xs text-slate-400 italic">등록된 근무가 없습니다.</p>`;
+        return;
+      }
+
+      container.innerHTML = dayShifts.map((s, i) => {
+        const emp = state.employees.find(e => e.id === s.empId);
+        return `
+          <div class="flex justify-between items-center bg-slate-50 p-2 rounded-lg border text-xs">
+            <div>
+              <span class="font-bold text-slate-800">${esc(emp ? emp.name : '')}</span>
+              <span class="text-slate-500">(${esc(shiftStoreOf(s) || '점포 미지정')} · ${esc(s.type)})</span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <span class="font-bold text-purple-900">${esc(s.hours)}시간</span>
+              <button onclick="deleteShift(cuDayShiftIds[${i}])" class="text-red-500 hover:text-red-700 font-bold">삭제</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 근무 한 건을 만든다. 점포가 비어 있는 기록은 만들지 않는다.
+    //  sv: 1 = "점포를 고를 수 있는 화면에서 입력한 기록" 표시 (없으면 「점포 표기 확인」 대상이 될 수 있다)
+    function cuNewShift(type, hours) {
+      const empId = document.getElementById('shiftEmpId').value;
+      let store = document.getElementById('shiftStore').value;
+      const h = Number(hours);
+
+      if (!empId) { showCustomAlert('입력 오류', '알바생을 선택해 주세요.'); return null; }
+      if (!STORES.includes(store)) store = cuHomeStore(empId);
+      if (!store) { showCustomAlert('입력 오류', '근무 점포를 선택해 주세요.'); return null; }
+      if (!(h > 0)) { showCustomAlert('입력 오류', '근무 시간을 입력해 주세요.'); return null; }
+
+      return {
+        // 입력 시각 + 짧은 난수 (두 사람이 같은 순간에 입력해도 ID 가 겹치지 않게)
+        id: 'shift_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        date: state.selectedDate,
+        empId, store, type,
+        hours: h,
+        sv: 1
+      };
+    }
+
+    // 근무 한 건을 넣는다. 같은 근무가 이미 있으면 먼저 묻는다. "등록되었습니다" 는 서버가 저장한 뒤에 띄운다.
+    function cuAddShift(shift, toastMsg) {
+      const go = () => {
+        state.shifts.push(shift);
+        if (state.currentUser.role === 'emp') cuPend.add.push(shift);
+        saveData({ onResult: (ok) => { if (ok) showToast(toastMsg); } });
+        render();
+        closeShiftModal();
+      };
+      const dup = state.shifts.some(s => s.empId === shift.empId && s.date === shift.date
+        && s.type === shift.type && Number(s.hours) === shift.hours);
+      if (dup) {
+        showCustomConfirm('같은 근무가 이미 있습니다',
+          `${shift.date} 에 같은 근무(${shift.type} ${shift.hours}시간)가 이미 등록되어 있습니다.\n한 건 더 등록하시겠습니까?`, go);
+      } else {
+        go();
+      }
+    }
+
+    function applyPreset(type, hours) {
+      if (!cuReady()) return;
+      const shift = cuNewShift(type, hours);
+      if (!shift) return;
+      cuAddShift(shift, '근무가 등록되었습니다.');
+    }
+
+    function saveShift(e) {
+      e.preventDefault();
+      const type = document.getElementById('shiftType').value;
+      const hours = parseFloat(document.getElementById('shiftHours').value);
+      if (!cuReady()) return;
+      const shift = cuNewShift(type, hours);
+      if (!shift) return;
+      cuAddShift(shift, '근무가 저장되었습니다.');
+    }
+
+    function deleteShift(shiftId) {
+      if (!cuReady()) return;
+      showCustomConfirm('삭제 확인', '근무 기록을 삭제하시겠습니까?', () => {
+        state.shifts = state.shifts.filter(s => s.id !== shiftId);
+        if (state.currentUser.role === 'emp') {
+          // 아직 서버에 보내지 않은 근무면 보낼 목록에서 빼고, 이미 서버에 있는 근무면 "지울 것"에 넣는다
+          const i = cuPend.add.findIndex(x => x.id === shiftId);
+          if (i >= 0) cuPend.add.splice(i, 1); else cuPend.rem.push(shiftId);
+        }
+        saveData();
+        render();
+        renderDayShiftList();
+      });
+    }
+
+    function getStoreJoinersResigners(storeName, year, month) {
+      let joiners = [];
+      let resigners = [];
+
+      state.employees.forEach(e => {
+        if ((e.store || '') === storeName) {
+          if (e.joinDate) {
+            const [jy, jm, jd] = e.joinDate.split('-').map(Number);
+            if (jy === year && jm === month) joiners.push(`${e.name} (${jm}월 ${jd}일)`);
+          }
+          if (e.resignDate) {
+            const [ry, rm, rd] = e.resignDate.split('-').map(Number);
+            if (ry === year && rm === month) resigners.push(`${e.name} (${rm}월 ${rd}일)`);
+          }
+        }
+      });
+
+      return {
+        joinersStr: joiners.length > 0 ? joiners.join(', ') : '',
+        resignersStr: resigners.length > 0 ? resigners.join(', ') : ''
+      };
+    }
+
+    // ----------------------------------------------------
+    // 점포 표기 확인 (관리자 전용)
+    //  2026-09-21 ~ 이 버전 배포 전에는 근무 점포를 고를 수 없었다. 그때 입력된 근무는
+    //  점포 칸이 비었거나 전부 "유니코어"로 찍혀 있어, 소속 점포와 다르면 관리자가 한 번 확인한다.
+    //  (알바생별 월급은 영향이 없다. 달라지는 것은 점포별 합계다.)
+    // ----------------------------------------------------
+    function cuShiftIdTime(s) {
+      const m = /^shift_(\d{11,14})/.exec(String(s.id || ''));
+      return m ? Number(m[1]) : NaN;   // 근무 ID 에 들어 있는 입력 시각
+    }
+
+    function cuStoreReviewList() {
+      const list = [];
+      state.shifts.forEach(s => {
+        if (s.sv) return;                               // 점포를 고를 수 있는 화면에서 입력했거나 이미 확인한 기록
+        const home = cuHomeStore(s.empId);
+        if (!home) return;                              // 소속 점포를 모르면 바로잡을 기준이 없다
+        if (!STORES.includes(s.store)) {
+          list.push({ s, home, forced: true });         // 점포 칸이 비었거나 모르는 이름 → 소속 점포로만 바꿀 수 있다
+        } else if (s.store !== home && cuShiftIdTime(s) >= STORE_FIX_FROM) {
+          list.push({ s, home, forced: false });        // 점포를 고를 수 없던 기간에 입력됨
+        }
+      });
+      list.sort((a, b) => (a.s.date < b.s.date ? -1 : a.s.date > b.s.date ? 1 : 0));
+      return list;
+    }
+
+    function renderStoreReviewNotice() {
+      const box = document.getElementById('storeReviewNotice');
+      if (!box) return;
+      const isAdmin = state.currentUser && state.currentUser.role === 'admin';
+      const n = isAdmin ? cuStoreReviewList().length : 0;
+      if (n === 0) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+      }
+      box.classList.remove('hidden');
+      box.innerHTML = `
+        <div class="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <p class="font-bold text-sm text-amber-900">⚠️ 점포 표기를 확인할 근무 기록이 ${n}건 있습니다</p>
+            <p class="text-xs text-amber-800 mt-0.5">9월 21일 이후 점포를 고를 수 없던 화면에서 입력된 기록입니다. 월급은 그대로이고, 점포별 합계만 달라집니다.</p>
+          </div>
+          <button onclick="openStoreReviewModal()" class="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-sm whitespace-nowrap">확인하기</button>
+        </div>
+      `;
+    }
+
+    function openStoreReviewModal() {
+      const list = cuStoreReviewList();
+      const body = document.getElementById('storeReviewList');
+      body.innerHTML = list.map(item => {
+        const emp = state.employees.find(e => e.id === item.s.empId);
+        const cur = STORES.includes(item.s.store) ? item.s.store : '(없음)';
+        return `
+          <tr class="border-b hover:bg-slate-50">
+            <td class="p-2 text-center"><input type="checkbox" data-id="${esc(item.s.id)}" data-home="${esc(item.home)}" checked ${item.forced ? 'disabled' : ''} onchange="updateStoreReviewCount()"></td>
+            <td class="p-2 font-mono">${esc(item.s.date)}</td>
+            <td class="p-2 font-bold text-slate-800">${esc(emp ? emp.name : '')}</td>
+            <td class="p-2 text-right">${esc(item.s.hours)}시간</td>
+            <td class="p-2 text-slate-500">${esc(cur)}</td>
+            <td class="p-2 font-bold text-purple-900">${esc(item.home)}</td>
+          </tr>
+        `;
+      }).join('');
+      document.getElementById('storeReviewAll').checked = true;
+      updateStoreReviewCount();
+      document.getElementById('storeReviewModal').classList.remove('hidden');
+    }
+
+    function closeStoreReviewModal() {
+      document.getElementById('storeReviewModal').classList.add('hidden');
+    }
+
+    function toggleStoreReviewAll(checked) {
+      document.querySelectorAll('#storeReviewList input[type=checkbox]').forEach(b => {
+        if (!b.disabled) b.checked = checked;
+      });
+      updateStoreReviewCount();
+    }
+
+    function updateStoreReviewCount() {
+      const boxes = Array.from(document.querySelectorAll('#storeReviewList input[type=checkbox]'));
+      const n = boxes.filter(b => b.checked).length;
+      document.getElementById('storeReviewCount').innerText = `전체 ${boxes.length}건 중 ${n}건을 소속 점포로 변경`;
+    }
+
+    function applyStoreReview() {
+      const boxes = Array.from(document.querySelectorAll('#storeReviewList input[type=checkbox]'));
+      if (boxes.length === 0) { closeStoreReviewModal(); return; }
+      if (!cuReady()) return;
+
+      const fix = {}, keep = {};
+      boxes.forEach(b => { if (b.checked) fix[b.dataset.id] = b.dataset.home; else keep[b.dataset.id] = true; });
+
+      let nFix = 0, nKeep = 0;
+      state.shifts.forEach(s => {
+        if (s.sv) return;
+        if (fix[s.id]) {
+          const home = fix[s.id];                       // 창에 보여 준 그 점포로 바꾼다
+          if (STORES.includes(home)) { s.store = home; s.sv = 1; nFix++; }
+        } else if (keep[s.id] && STORES.includes(s.store)) {
+          s.sv = 1;                                     // 지금 표기가 맞다고 확인함
+          nKeep++;
+        }
+      });
+
+      closeStoreReviewModal();
+      render();
+      saveData({ onResult: (ok) => {
+        if (ok) showToast(`점포 표기 ${nFix}건을 바로잡았습니다.` + (nKeep ? ` (${nKeep}건은 그대로 둠)` : ''), 4000);
+      }});
+    }
+
+    // ADMIN TABLES & CARDS
+    function renderPayrollTable(opts) {
+      const container = document.getElementById('payrollTablesContainer');
+
+      // 서버에서 새 내용을 받아 다시 그릴 때, 추가수당 칸에 입력 중이면 표를 건드리지 않는다 (입력이 날아가지 않게)
+      if (opts && opts.fromPoll && document.activeElement
+          && document.activeElement.tagName === 'INPUT' && container.contains(document.activeElement)) {
+        cuPayrollStale = true;   // 칸에서 나올 때 다시 그린다
+        return;
+      }
+      cuPayrollStale = false;
+      container.innerHTML = '';
+
+      // 임금대장은 "소속 점포"별로 묶는다. 한 알바생의 그 달 근무는 어느 점포에서 일했든 모두 그 사람 월급에 들어간다.
+      const storesToDisplay = state.currentStore === '전체'
+        ? cuAllStoreNames()
+        : [state.currentStore];
+
+      const monthShifts = state.shifts.filter(s => {
+        const [y, m] = s.date.split('-').map(Number);
+        return y === state.year && m === (state.month + 1);
+      });
+
+      storesToDisplay.forEach(storeName => {
+        const displayStoreName = cuStoreLabel(storeName);
+        const { joinersStr, resignersStr } = getStoreJoinersResigners(storeName, state.year, state.month + 1);
+
+        const storeEmployees = state.employees.filter(e => (e.store || '') === storeName);
+        let sumHours = 0, sumExtra = 0, sumWage = 0;
+
+        let tableRows = storeEmployees.map(e => {
+          const empShifts = monthShifts.filter(s => s.empId === e.id);
+          const uniqueDays = new Set(empShifts.map(s => s.date)).size;
+          const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
+          const basicPay = Math.round(totalHours * cuRate(e));
+          const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
+          const totalWage = basicPay + extraPay;
+          sumHours += totalHours; sumExtra += extraPay; sumWage += totalWage;
+
+          const displayIdNumber = e.idNumber ? `<span class="font-bold font-mono text-slate-900">${esc(e.idNumber)}</span>` : '<span class="text-slate-400 italic">미입력</span>';
+          const idTypeTag = e.idType === 'foreigner' ? ' <span class="text-[10px] bg-amber-100 text-amber-800 px-1 rounded font-bold">[외국인]</span>' : '';
+
+          return `
+            <tr class="hover:bg-slate-50 border-b">
+              <td class="p-3 font-bold text-slate-800">${esc(e.name)}</td>
+              <td class="p-3 text-xs font-mono">${displayIdNumber}${idTypeTag}</td>
+              <td class="p-3 text-xs text-slate-700">상용직</td>
+              <td class="p-3 text-right text-xs">${cuRate(e).toLocaleString()} 원</td>
+              <td class="p-3 text-center text-xs">x</td>
+              <td class="p-3 text-center font-bold text-xs text-slate-700">${uniqueDays} 일</td>
+              <td class="p-3 text-right font-bold text-xs text-purple-900">${totalHours} 시간</td>
+              <td class="p-3 text-right">
+                <input type="number" step="1000" min="0" value="${extraPay}" onchange="updateEmpExtraPay('${e.id}', this.value)" class="w-20 border rounded p-1 text-xs text-right font-bold bg-slate-50 focus:bg-white"> 원
+              </td>
+              <td class="p-3 text-right font-black text-sm text-emerald-600">${totalWage.toLocaleString()} 원</td>
+              <td class="p-3 text-center">
+                <button onclick="openPayslipModal('${e.id}')" class="bg-purple-900 hover:bg-purple-800 text-white font-bold text-[11px] px-2.5 py-1 rounded-lg transition shadow-sm">
+                  📋 급여명세서
+                </button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+        if (storeEmployees.length === 0) {
+          tableRows = `<tr><td colspan="10" class="p-4 text-center text-xs text-slate-400 italic">등록된 알바생이 없습니다.</td></tr>`;
+        } else {
+          // 점포 합계 (이 점포에 소속된 알바생들의 그 달 합계)
+          tableRows += `
+            <tr class="bg-purple-50 border-t-2 border-purple-200 font-bold">
+              <td class="p-3 text-xs text-purple-900" colspan="6">점포 합계 (${storeEmployees.length}명)</td>
+              <td class="p-3 text-right text-xs text-purple-900">${sumHours} 시간</td>
+              <td class="p-3 text-right text-xs text-purple-900">${sumExtra.toLocaleString()} 원</td>
+              <td class="p-3 text-right font-black text-sm text-emerald-700">${sumWage.toLocaleString()} 원</td>
+              <td class="p-3"></td>
+            </tr>
+          `;
+        }
+
+        const blockHtml = `
+          <div class="border rounded-2xl overflow-hidden bg-white shadow-sm">
+            <div class="bg-purple-900 text-white p-3 font-bold text-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <span>🏪 ${displayStoreName} (${state.year}년 ${state.month + 1}월)</span>
+              <button onclick="exportBankTransferExcelForStore('${storeName}')" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition shadow-sm">
+                🏦 ${displayStoreName} 급여 이체 엑셀 (.xlsx) 다운로드
+              </button>
+            </div>
+            <div class="bg-slate-100 p-2 text-xs border-b space-y-1">
+              <p><b class="text-slate-700">입사자:</b> <span class="text-emerald-700 font-bold">${esc(joinersStr || '없음')}</span></p>
+              <p><b class="text-slate-700">퇴사자:</b> <span class="text-red-600 font-bold">${esc(resignersStr || '없음')}</span></p>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-slate-50 text-slate-600 text-xs uppercase font-semibold border-b">
+                    <th class="p-3">이름</th>
+                    <th class="p-3">주민/외국인등록번호</th>
+                    <th class="p-3">근로기준</th>
+                    <th class="p-3 text-right">시급</th>
+                    <th class="p-3 text-center">4대보험</th>
+                    <th class="p-3 text-center">총근무일수</th>
+                    <th class="p-3 text-right">총근무시간</th>
+                    <th class="p-3 text-right">추가수당(교통비)</th>
+                    <th class="p-3 text-right">총 임금지급액</th>
+                    <th class="p-3 text-center">개별 명세서</th>
+                  </tr>
+                </thead>
+                <tbody>${tableRows}</tbody>
+              </table>
+            </div>
+          </div>
+        `;
+
+        container.innerHTML += blockHtml;
+      });
+    }
+
+    function renderEmployeeCards() {
+      const grid = document.getElementById('employeeCardsGrid');
+      grid.innerHTML = state.employees.map(emp => {
+        const bankStr = emp.bankName ? `${emp.bankName} ${emp.accountNumber} (${emp.accountHolder || emp.name})` : '계좌 미입력';
+        const displayIdNumber = emp.idNumber || '미입력';
+        const statusBadge = emp.resignDate
+          ? `<span class="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded-full">퇴사 (${esc(emp.resignDate)})</span>`
+          : `<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">재직 중 (입사: ${esc(emp.joinDate || '미입력')})</span>`;
+
+        return `
+          <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-start">
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-purple-700 bg-purple-50 px-2.5 py-1 rounded-full">${esc(emp.store || '점포 미지정')}</span>
+                ${statusBadge}
+              </div>
+              <h4 class="text-lg font-bold text-slate-800 mt-1">${esc(emp.name)}</h4>
+              <p class="text-xs text-slate-500">시급: <b>${cuRate(emp).toLocaleString()}원</b> | PIN: <b>${esc(emp.pin || '1234')}</b></p>
+              <p class="text-xs text-slate-600 font-medium">🏦 ${esc(bankStr)}</p>
+              <p class="text-xs text-slate-800 font-mono font-bold">🆔 ${esc(displayIdNumber)} (${emp.idType === 'foreigner' ? '외국인' : '내국인'})</p>
+            </div>
+            <div class="flex flex-col gap-1 items-end">
+              <button onclick="openEmployeeModal('${emp.id}')" class="text-xs font-bold text-purple-700 hover:underline p-1">수정</button>
+              ${!emp.resignDate ? `<button onclick="quickResign('${emp.id}')" class="text-xs font-bold text-orange-600 hover:underline p-1">퇴사처리</button>` : ''}
+              <button onclick="deleteEmployee('${emp.id}')" class="text-xs font-bold text-red-400 hover:text-red-600 p-1">삭제</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openEmployeeModal(empId = null) {
+      document.getElementById('empId').value = empId || '';
+      if (empId) {
+        const emp = state.employees.find(e => e.id === empId);
+        document.getElementById('empModalTitle').innerText = '알바생 정보 수정';
+        document.getElementById('empName').value = emp.name;
+        document.getElementById('empStore').value = emp.store;
+        document.getElementById('empHourlyRate').value = emp.hourlyRate;
+        document.getElementById('empPin').value = emp.pin || '1234';
+        document.getElementById('empJoinDate').value = emp.joinDate || '';
+        document.getElementById('empResignDate').value = emp.resignDate || '';
+        document.getElementById('empBankName').value = emp.bankName || '';
+        document.getElementById('empAccountNumber').value = emp.accountNumber || '';
+        document.getElementById('empAccountHolder').value = emp.accountHolder || emp.name;
+        document.getElementById('empIdType').value = emp.idType || 'resident';
+        document.getElementById('empIdNumber').value = emp.idNumber || '';
+      } else {
+        document.getElementById('empModalTitle').innerText = '알바생 신규 등록';
+        document.getElementById('employeeForm').reset();
+        document.getElementById('empHourlyRate').value = 10320;   // 신규 등록 기본 시급 = 2026년 최저임금. 해가 바뀌면 이 숫자와 위쪽 입력 칸의 value 를 함께 고친다
+        document.getElementById('empPin').value = '1234';
+        document.getElementById('empJoinDate').value = cuToday();
+      }
+      toggleAdminIdInput();
+      document.getElementById('employeeModal').classList.remove('hidden');
+    }
+
+    function closeEmployeeModal() {
+      document.getElementById('employeeModal').classList.add('hidden');
+    }
+
+    function toggleAdminIdInput() {
+      const type = document.getElementById('empIdType').value;
+      const input = document.getElementById('empIdNumber');
+      if (type === 'none') {
+        input.classList.add('hidden');
+      } else {
+        input.classList.remove('hidden');
+      }
+    }
+
+    function saveEmployee(e) {
+      e.preventDefault();
+      if (!cuReady()) return;
+      const id = document.getElementById('empId').value;
+      const name = document.getElementById('empName').value;
+      const store = document.getElementById('empStore').value;
+      const hourlyRate = parseFloat(document.getElementById('empHourlyRate').value);
+      const pin = String(document.getElementById('empPin').value).trim();
+      const joinDate = document.getElementById('empJoinDate').value;
+      const resignDate = document.getElementById('empResignDate').value;
+      const bankName = document.getElementById('empBankName').value.trim();
+      const accountNumber = document.getElementById('empAccountNumber').value.trim();
+      const accountHolder = document.getElementById('empAccountHolder').value.trim();
+      const idType = document.getElementById('empIdType').value;
+      const idNumber = document.getElementById('empIdNumber').value.trim();
+
+      const empObj = { id: id || ('emp_' + Date.now()), name, store, hourlyRate, pin, joinDate, resignDate, bankName, accountNumber, accountHolder, idType, idNumber };
+
+      if (id) {
+        const idx = state.employees.findIndex(e => e.id === id);
+        if (idx !== -1) state.employees[idx] = empObj;
+      } else {
+        state.employees.push(empObj);
+      }
+
+      saveData({ onResult: (ok) => { if (ok) showToast('알바생 정보가 저장되었습니다.'); } });
+      populateEmpSelect();
+      render();
+      closeEmployeeModal();
+    }
+
+    function quickResign(empId) {
+      if (!cuReady()) return;
+      const today = cuToday();
+      showCustomConfirm('퇴사 처리', `오늘 날짜(${today}) 기준으로 퇴사 처리하시겠습니까?`, () => {
+        const emp = state.employees.find(e => e.id === empId);
+        if (emp) {
+          emp.resignDate = today;
+          const name = emp.name;
+          saveData({ onResult: (ok) => { if (ok) showToast(`${name}님이 퇴사 처리되었습니다.`); } });
+          populateEmpSelect();
+          render();
+        }
+      });
+    }
+
+    function deleteEmployee(empId) {
+      if (!cuReady()) return;
+      showCustomConfirm('완전 삭제', '알바생 정보를 완전 삭제하시겠습니까? (과거 근무기록도 지워집니다)', () => {
+        state.employees = state.employees.filter(e => e.id !== empId);
+        state.shifts = state.shifts.filter(s => s.empId !== empId);
+        saveData({ allowShrink: true });
+        populateEmpSelect();
+        render();
+      });
+    }
+
+    // EXPORT TAX ACCOUNTANT EXCEL (.xlsx) FILE
+    function exportTaxExcel() {
+      if (typeof XLSX === 'undefined') {
+        showCustomAlert('오류', '엑셀 모듈이 로드되지 않았습니다.');
+        return;
+      }
+
+      let wb = XLSX.utils.book_new();
+      let wsData = [];
+
+      wsData.push([]);
+      wsData.push(["", "* 근무자 임금대장은 매월 1일까지 세무사 사무실로 보내주시기 바랍니다."]);
+      wsData.push(["", "주소 : 서울특별시 강남구 논현로 507 1812호 이현세무법인 강남중앙  (06132)"]);
+      wsData.push(["", "Tel: 02-6426-3379    Fax: 02-6426-3381 ,     E-mail : kntax3377@naver.com"]);
+      wsData.push([]);
+
+      // 세무사 제출용은 점포 필터와 상관없이 전 점포를 한 장에 담는다
+      const storeList = cuAllStoreNames();
+
+      const currentMonthShifts = state.shifts.filter(s => {
+        const [y, m] = s.date.split('-').map(Number);
+        return y === state.year && m === (state.month + 1);
+      });
+
+      storeList.forEach(storeName => {
+        const displayStoreName = cuStoreLabel(storeName);
+        const { joinersStr, resignersStr } = getStoreJoinersResigners(storeName, state.year, state.month + 1);
+
+        wsData.push(["", displayStoreName]);
+        wsData.push(["", "입사자", joinersStr]);
+        wsData.push(["", "퇴사자", resignersStr]);
+        wsData.push(["", "이름", "주민등록번호", "근로기준", "시급", "건강보험\n국민연금 \n가입여부", "총근무일수", "총근무시간", "총 임금지급액"]);
+
+        const storeEmployees = state.employees.filter(e => (e.store || '') === storeName);
+
+        if (storeEmployees.length === 0) {
+          wsData.push(["", "-", "-", "상용직", 0, "x", 0, 0, 0]);
+        } else {
+          storeEmployees.forEach(e => {
+            const empShifts = currentMonthShifts.filter(s => s.empId === e.id);
+            const uniqueDays = new Set(empShifts.map(s => s.date)).size;
+            const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
+            const basicPay = Math.round(totalHours * cuRate(e));
+            const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
+            const totalWage = basicPay + extraPay;
+
+            wsData.push([
+              "",
+              e.name,
+              e.idNumber || "",
+              "상용직",
+              cuRate(e),
+              "x",
+              uniqueDays,
+              totalHours,
+              totalWage
+            ]);
+          });
+        }
+        wsData.push([]);
+      });
+
+      let ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!cols'] = [
+        { wch: 3 },  { wch: 12 }, { wch: 18 }, { wch: 10 },
+        { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 10 }, { wch: 14 }
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, `${state.year}년 ${state.month + 1}월`);
+      XLSX.writeFile(wb, `씨유_아르바이트_임금대장_${state.year}_${state.month + 1}월.xlsx`);
+      showToast('세무사 제출용 임금대장(.xlsx) 다운로드가 완료되었습니다.');
+    }
+
+    // EXPORT BANK MASS SALARY TRANSFER EXCEL FOR A SPECIFIC STORE (.xlsx)
+    function exportBankTransferExcelForStore(targetStoreName) {
+      if (typeof XLSX === 'undefined') {
+        showCustomAlert('오류', '엑셀 모듈이 로드되지 않았습니다.');
+        return;
+      }
+
+      const currentMonthShifts = state.shifts.filter(s => {
+        const [y, m] = s.date.split('-').map(Number);
+        return y === state.year && m === (state.month + 1);
+      });
+
+      const storeDisplayName = targetStoreName ? `CU${targetStoreName.replace('씨유', '')}` : 'CU_점포미지정';
+      let wb = XLSX.utils.book_new();
+      let wsData = [
+        ["입금은행", "입금계좌번호", "입금액", "예상예금주", "입금통장표시", "출금통장표시", "메모", "CMS코드", "받는분 휴대폰번호"]
+      ];
+
+      const storeEmployees = state.employees.filter(e => (e.store || '') === targetStoreName);
+
+      let hasData = false;
+      storeEmployees.forEach(e => {
+        const empShifts = currentMonthShifts.filter(s => s.empId === e.id);
+        const totalHours = empShifts.reduce((sum, s) => sum + (Number(s.hours) || 0), 0);
+        const basicPay = Math.round(totalHours * cuRate(e));
+        const extraPay = getEmpExtraPay(e.id, state.year, state.month + 1);
+        const totalWage = basicPay + extraPay;
+
+        if (totalWage > 0) {
+          hasData = true;
+          const cleanAccount = e.accountNumber ? String(e.accountNumber).replace(/[^0-9]/g, '') : '';
+          wsData.push([
+            e.bankName || "",
+            cleanAccount ? `'${cleanAccount}` : "",
+            totalWage,
+            e.accountHolder || e.name,
+            storeDisplayName,
+            e.name,
+            "",
+            "",
+            ""
+          ]);
+        }
+      });
+
+      if (!hasData) {
+        showCustomAlert('안내', `[${targetStoreName}]의 ${state.year}년 ${state.month + 1}월 급여 지급 대상 근무 기록이 없습니다.`);
+        return;
+      }
+
+      let ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!cols'] = [
+        { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+        { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, "급여이체");
+      XLSX.writeFile(wb, `급여등록_${storeDisplayName}_${state.year}년${state.month + 1}월.xlsx`);
+      showToast(`[${storeDisplayName}] 은행 대량이체용 엑셀 다운로드가 완료되었습니다.`);
+    }
+
+    // SAFE TAB SWITCHING
+    function switchTab(tabName) {
+      const isAdmin = state.currentUser && state.currentUser.role === 'admin';
+
+      if (!isAdmin && tabName !== 'calendar') {
+        tabName = 'calendar';
+      }
+
+      ['calendar', 'payroll', 'employees'].forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        const btn = document.getElementById(`tabBtn-${t}`);
+        if (el) el.classList.add('hidden');
+        if (btn) {
+          btn.classList.remove('border-b-2', 'border-purple-900', 'text-purple-900');
+          btn.classList.add('text-slate-500');
+        }
+      });
+
+      document.querySelectorAll('.admin-only').forEach(el => {
+        if (isAdmin) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
+      });
+
+      const activeTab = document.getElementById(`tab-${tabName}`);
+      const activeBtn = document.getElementById(`tabBtn-${tabName}`);
+      if (activeTab) activeTab.classList.remove('hidden');
+      if (activeBtn) {
+        activeBtn.classList.remove('text-slate-500');
+        activeBtn.classList.add('border-b-2', 'border-purple-900', 'text-purple-900');
+      }
+    }
+
+    function showCustomAlert(title, message) {
+      const modal = document.getElementById('customModal');
+      document.getElementById('customModalIcon').innerText = '⚠️';
+      document.getElementById('customModalTitle').innerText = title;
+      document.getElementById('customModalMessage').innerText = message;
+      document.getElementById('customModalActions').innerHTML = `<button onclick="closeCustomModal()" class="w-full bg-purple-900 text-white font-bold py-2 rounded-xl text-sm">확인</button>`;
+      modal.classList.remove('hidden');
+    }
+
+    function showCustomConfirm(title, message, onConfirm) {
+      const modal = document.getElementById('customModal');
+      document.getElementById('customModalIcon').innerText = '❓';
+      document.getElementById('customModalTitle').innerText = title;
+      document.getElementById('customModalMessage').innerText = message;
+      document.getElementById('customModalActions').innerHTML = `
+        <button onclick="closeCustomModal()" class="w-1/2 bg-slate-200 text-slate-700 font-bold py-2 rounded-xl text-sm">취소</button>
+        <button id="confirmBtn" class="w-1/2 bg-red-600 text-white font-bold py-2 rounded-xl text-sm">확인</button>
+      `;
+      document.getElementById('confirmBtn').onclick = () => { onConfirm(); closeCustomModal(); };
+      modal.classList.remove('hidden');
+    }
+
+    function closeCustomModal() { document.getElementById('customModal').classList.add('hidden'); }
+
+    function showToast(msg, ms) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-5 right-5 bg-purple-900 text-white font-bold px-4 py-3 rounded-2xl shadow-xl z-50 text-sm border border-purple-700';
+      toast.innerText = msg;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), ms || 2000);
+    }
+
+    // BACKUP/EXPORT
+    function exportData() {
+      const backup = { employees: state.employees, shifts: state.shifts, extras: state.extras, exportedAt: new Date().toISOString() };
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backup));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `CU_WorkData_${state.year}_${state.month+1}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+    }
+
+    function importData(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (!cuReady()) { e.target.value = ''; return; }
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        try {
+          const imported = JSON.parse(evt.target.result);
+          if (imported.employees && imported.shifts) {
+            state.employees = imported.employees.map(emp => ({
+              ...emp,
+              store: migrateStoreName(emp.store),
+              pin: String(emp.pin || '1234').trim()
+            }));
+            state.shifts = imported.shifts.map(s => ({
+              ...s,
+              store: migrateStoreName(s.store)
+            }));
+            if (imported.extras) state.extras = imported.extras;
+            populateEmpSelect();
+            render();
+            saveData({ allowShrink: true, onResult: (ok) => {
+              if (ok) showCustomAlert('성공', '데이터가 성공적으로 복구되었습니다.');
+            }});
+          }
+        } catch (err) { showCustomAlert('오류', '올바르지 않은 파일 형식입니다.'); }
+      };
+      reader.readAsText(file);
+      e.target.value = '';   // 같은 파일을 다시 고를 수 있게
+    }
+  </script>
+</body>
+</html>
